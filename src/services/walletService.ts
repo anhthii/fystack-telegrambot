@@ -60,11 +60,22 @@ export async function getWalletData() {
   return mockWalletData;
 }
 
+// Function to calculate asset distribution for allocation chart
+export function calculateAssetDistribution() {
+  // Calculate total portfolio value
+  const totalValue = mockWalletData.reduce((sum, asset) => sum + parseFloat(asset.valueUsd), 0);
+  
+  // Generate distribution data for each asset
+  return mockWalletData.map(asset => ({
+    name: asset.asset.symbol,
+    percentage: Math.round((parseFloat(asset.valueUsd) / totalValue) * 100)
+  }));
+}
+
 // Function to get portfolio allocation
 export async function getPortfolioAllocation() {
-  // In a real implementation, this would calculate or fetch allocation data
-  // For now, return mock data
-  return mockAllocationData;
+  // Return actual asset distribution instead of mock categories
+  return calculateAssetDistribution();
 }
 
 // This function will be implemented later with real API endpoints

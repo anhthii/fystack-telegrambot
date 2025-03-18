@@ -64,6 +64,23 @@ async function showWalletData(chatId: number): Promise<void> {
     // Get wallet data from service
     const walletData = await getWalletData();
 
+    // Mock wallet details data
+    const walletDetails = {
+      id: "7d8438ac-3289-4f99-b07b-54c9e2098839",
+      name: "Standard 1",
+      value_usd: "12.85078129849594576704791384309",
+      disabled: false,
+      threshold: 1
+    };
+
+    // Display wallet details
+    await bot.sendMessage(chatId, 
+      `🏦 *WALLET DETAILS*\n\n` +
+      `*Name:* ${walletDetails.name}\n` +
+      `*Value:* $${parseFloat(walletDetails.value_usd).toFixed(2)} USD`,
+      { parse_mode: "Markdown" }
+    );
+
     // Calculate total USD value
     const totalUsdValue = walletData.reduce(
       (sum, asset) => sum + parseFloat(asset.valueUsd),
@@ -79,10 +96,12 @@ async function showWalletData(chatId: number): Promise<void> {
     // Get portfolio allocation
     const allocation = await getPortfolioAllocation();
 
-    // Transform the object into an array for the chart
-    const allocationArray = Object.entries(allocation).map(([name, percentage]) => ({
+    // Transform the allocation data to match the expected format
+    const allocationArray = Object.entries(allocation).map(([name, data]) => ({
       name,
-      percentage
+      symbol: data.name, // Assuming this might be the symbol or we can extract it
+      percentage: data.percentage,
+      value: (data.percentage * totalUsdValue) / 100 // Calculate value based on percentage
     }));
 
     // Generate allocation chart

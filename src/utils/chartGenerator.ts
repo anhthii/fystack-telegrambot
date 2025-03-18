@@ -2,7 +2,7 @@ import { ChartJSNodeCanvas } from 'chartjs-node-canvas';
 import { v4 as uuidv4 } from 'uuid';
 import fs from 'fs';
 import path from 'path';
-import { ChartConfiguration, ChartTypeRegistry, Chart } from 'chart.js';
+import { ChartConfiguration, ChartTypeRegistry } from 'chart.js';
 
 // Ensure temp directory exists
 const tempDir = path.join(__dirname, '../../temp');
@@ -13,12 +13,11 @@ if (!fs.existsSync(tempDir)) {
 // Configure chart canvas
 const width = 600;
 const height = 400;
-const chartJSNodeCanvas = new ChartJSNodeCanvas({ width, height, backgroundColour: '#1e1e1e' });
-
-// Add near the top of the file
-type ChartConfigurationWithoutTypeConstraint = Omit<ChartConfiguration<keyof ChartTypeRegistry, number[], unknown>, 'type'> & {
-  type: string;
-};
+const chartJSNodeCanvas = new ChartJSNodeCanvas({
+  width,
+  height,
+  backgroundColour: '#333333'
+});
 
 /**
  * Creates a balance chart image
@@ -37,7 +36,7 @@ export async function createBalanceChart(balance: number): Promise<string> {
     { time: '16', value: balance },
   ];
   
-  const configuration = {
+  const configuration: ChartConfiguration = {
     type: 'line',
     data: {
       labels: mockBalanceHistory.map(point => point.time),
@@ -85,7 +84,7 @@ export async function createBalanceChart(balance: number): Promise<string> {
         }
       }
     }
-  } as any;
+  };
   
   const image = await chartJSNodeCanvas.renderToBuffer(configuration);
   const fileName = `balance-chart-${uuidv4()}.png`;
@@ -97,22 +96,28 @@ export async function createBalanceChart(balance: number): Promise<string> {
 
 /**
  * Creates a portfolio allocation chart image
- * @param allocation Portfolio allocation data
+ * @param allocation Portfolio allocation data (array of {name, symbol, percentage, value})
  * @returns Path to the generated chart image
  */
-export async function createAllocationChart(allocation: any[]): Promise<string> {
-  const configuration = {
+export async function createAllocationChart(allocation: {name: string, symbol: string, percentage: number, value: number}[]): Promise<string> {
+  // Sort by percentage (highest first) for better visualization
+  const sortedAllocation = [...allocation].sort((a, b) => b.percentage - a.percentage);
+  
+  const configuration: ChartConfiguration = {
     type: 'doughnut',
     data: {
-      labels: allocation.map(item => item.name),
+      labels: sortedAllocation.map(item => `${item.symbol} (${item.percentage}%)`),
       datasets: [{
-        data: allocation.map(item => item.percentage),
+        data: sortedAllocation.map(item => item.percentage),
         backgroundColor: [
           '#0088cc', // Blue
           '#00cc88', // Green
           '#cc0088', // Pink
           '#cc8800', // Orange
-          '#88cc00'  // Light green
+          '#88cc00', // Light green
+          '#8800cc', // Purple
+          '#cc0000', // Red
+          '#00cccc', // Cyan
         ],
         borderWidth: 0
       }]
@@ -120,7 +125,7 @@ export async function createAllocationChart(allocation: any[]): Promise<string> 
     options: {
       plugins: {
         legend: {
-          position: 'bottom',
+          position: 'right',
           labels: {
             color: 'rgba(255, 255, 255, 0.7)',
             padding: 20,
@@ -132,16 +137,16 @@ export async function createAllocationChart(allocation: any[]): Promise<string> 
         tooltip: {
           callbacks: {
             label: function(context: any) {
-              const label = context.label || '';
-              const value = context.parsed || 0;
-              return `${label}: ${value}%`;
+              const index = context.dataIndex;
+              const item = sortedAllocation[index];
+              return `${item.name}: $${item.value.toFixed(2)} (${item.percentage}%)`;
             }
           }
         }
       },
       cutout: '60%'
-    }
-  } as any;
+    } as any
+  };
   
   const image = await chartJSNodeCanvas.renderToBuffer(configuration);
   const fileName = `allocation-chart-${uuidv4()}.png`;
