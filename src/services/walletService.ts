@@ -1,0 +1,74 @@
+// Mock wallet data
+const mockWalletData = [
+  {
+    balance: "0.0014924786335583",
+    onHold: "0.0014397222976578",
+    availableBalance: "0.0000527563359005",
+    asset: {
+      id: "a469642e-5466-4d69-834d-537f33ee5c81",
+      name: "Ethereum Sepolia",
+      symbol: "ETH",
+      decimals: 18,
+      logoUrl: "https://icons.iconarchive.com/icons/cjdowner/cryptocurrency-flat/512/Ethereum-ETH-icon.png",
+    },
+    priceUsd: "1895.4969261030274",
+    valueUsd: "2.82898866218420428495686439742",
+  },
+  {
+    balance: "0.0250000000000000",
+    onHold: "0.0000000000000000",
+    availableBalance: "0.0250000000000000",
+    asset: {
+      id: "b469642e-5466-4d69-834d-537f33ee5c82",
+      name: "Bitcoin",
+      symbol: "BTC",
+      decimals: 8,
+      logoUrl: "https://icons.iconarchive.com/icons/cjdowner/cryptocurrency-flat/512/Bitcoin-BTC-icon.png",
+    },
+    priceUsd: "34250.75",
+    valueUsd: "856.26875",
+  },
+  {
+    balance: "125.0000000000000000",
+    onHold: "0.0000000000000000",
+    availableBalance: "125.0000000000000000",
+    asset: {
+      id: "c469642e-5466-4d69-834d-537f33ee5c83",
+      name: "Solana",
+      symbol: "SOL",
+      decimals: 9,
+      logoUrl: "https://icons.iconarchive.com/icons/cjdowner/cryptocurrency-flat/512/Solana-SOL-icon.png",
+    },
+    priceUsd: "45.75",
+    valueUsd: "5718.75",
+  },
+];
+
+// Mock portfolio allocation data
+const mockAllocationData = {
+  blueChip: 61,
+  midCap: 13,
+  lowCap: 24,
+  microCap: 2,
+  stablecoin: 0
+};
+
+// Function to get wallet data
+export async function getWalletData() {
+  // In a real implementation, this would fetch data from an API
+  // For now, return mock data
+  return mockWalletData;
+}
+
+// Function to get portfolio allocation
+export async function getPortfolioAllocation() {
+  // In a real implementation, this would calculate or fetch allocation data
+  // For now, return mock data
+  return mockAllocationData;
+}
+
+// This function will be implemented later with real API endpoints
+export async function fetchWalletData(walletAddress: string) {
+  // TODO: Replace with actual API call
+  return mockWalletData;
+} 
