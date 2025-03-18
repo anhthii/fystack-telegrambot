@@ -91,21 +91,51 @@ async function showWalletData(chatId: number): Promise<void> {
       caption: "📊 Portfolio Allocation",
     });
 
-    // Show detailed assets
-    let assetsMessage = "🔎 *Detailed Assets*:\n\n";
-    walletData.forEach((asset) => {
-      assetsMessage += `*${asset.asset.name}* (${asset.asset.symbol})\n`;
-      assetsMessage += `Balance: ${asset.balance} ${asset.asset.symbol}\n`;
-      assetsMessage += `Value: $${parseFloat(asset.valueUsd).toFixed(
-        2
-      )} USD\n\n`;
+    // Show detailed assets with enhanced formatting
+    let assetsMessage = "💎 *YOUR CRYPTO ASSETS* 💎\n\n";
+    
+    // Sort assets by value (highest first)
+    const sortedAssets = [...walletData].sort((a, b) => 
+      parseFloat(b.valueUsd) - parseFloat(a.valueUsd)
+    );
+    
+    sortedAssets.forEach((asset, index) => {
+      const usdValue = parseFloat(asset.valueUsd);
+      const percentage = (usdValue / totalUsdValue) * 100;
+      const assetEmoji = getAssetEmoji(asset.asset.symbol);
+      
+      assetsMessage += `${index + 1}. ${assetEmoji} *${asset.asset.name}* (${asset.asset.symbol})\n`;
+      assetsMessage += `   • Amount: \`${asset.balance}\` ${asset.asset.symbol}\n`;
+      assetsMessage += `   • Value: \`$${usdValue.toFixed(2)}\` USD\n`;
+      assetsMessage += `   • Portfolio: \`${percentage.toFixed(2)}%\`\n\n`;
     });
+    
+    assetsMessage += "💡 _Tap on_ 📊 _Monitor Wallet to refresh data_";
 
     await bot.sendMessage(chatId, assetsMessage, { parse_mode: "Markdown" });
   } catch (error: unknown) {
     console.error('Error showing wallet data:', error);
     await bot.sendMessage(chatId, 'Sorry, there was an error fetching your wallet data.');
   }
+}
+
+// Helper function to get appropriate emoji for crypto assets
+function getAssetEmoji(symbol: string): string {
+  const emojiMap: Record<string, string> = {
+    'BTC': '₿',
+    'ETH': '⟠',
+    'USDT': '💵',
+    'BNB': '🔶',
+    'XRP': '💧',
+    'ADA': '🔷',
+    'SOL': '☀️',
+    'DOGE': '🐶',
+    'DOT': '⚫',
+    'AVAX': '❄️',
+    // Add more mappings as needed
+  };
+  
+  return emojiMap[symbol] || '🪙';
 }
 
 // Enable graceful stop
