@@ -1,18 +1,20 @@
-import axios from 'axios';
-import camelcaseKeys from 'camelcase-keys';
-import snakecaseKeys from 'snakecase-keys';
-import dotenv from 'dotenv';
+import axios from "axios";
+import camelcaseKeys from "camelcase-keys";
+import snakecaseKeys from "snakecase-keys";
+import dotenv from "dotenv";
 
 dotenv.config();
 
 // Base URL configuration from environment
-const API_BASE_URL = process.env.API_BASE_URL || 'https://apex.void.exchange/api/v1';
+const API_BASE_URL =
+  process.env.API_BASE_URL || "https://apex.void.exchange/api/v1";
 
 // Create axios instance with default config
-const apiClient = axios.create({
+export const apiClient = axios.create({
   baseURL: API_BASE_URL,
   headers: {
-    'Content-Type': 'application/json',
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${process.env.API_KEY}`,
   },
 });
 
@@ -47,15 +49,22 @@ export async function createWithdrawal(
   recipientAddress: string
 ): Promise<any> {
   try {
+    console.log("Creating withdrawal...",  {
+        assetId,
+        amount,
+        recipientAddress,
+      });
     const response = await apiClient.post(`/wallets/${walletId}/withdrawal`, {
       assetId,
       amount,
       recipientAddress,
     });
-    
+
+    console.log("Withdrawal created successfully:", response);
+
     return response.data;
   } catch (error) {
-    console.error('Error creating withdrawal:', error);
+    console.error("Error creating withdrawal:", error);
     throw error;
   }
 }
@@ -70,7 +79,8 @@ export async function getWalletDetails(walletId: string): Promise<any> {
     const response = await apiClient.get(`/wallets/${walletId}`);
     return response.data;
   } catch (error) {
-    console.error('Error fetching wallet details:', error);
+    console.error("Error fetching wallet details:", error);
     throw error;
   }
-} 
+}
+

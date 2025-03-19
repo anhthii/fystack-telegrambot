@@ -21,7 +21,10 @@ const bot = new TelegramBot(process.env.BOT_TOKEN || "", { polling: true });
 const userStates = new Map();
 
 // Wallet ID (should be stored per user in a real application)
-const WALLET_ID = "7d8438ac-3289-4f99-b07b-54c9e2098839";
+const WALLET_ID = "6889a826-ac1e-4354-a150-66d6c4cfe97c";
+
+// Create a map to store asset data with a unique key
+const assetDataMap = new Map<string, { id: string; symbol: string; balance: string }>();
 
 // Start command handler
 bot.onText(/\/start/, async (msg) => {
@@ -104,7 +107,7 @@ async function showWalletActions(chatId: number): Promise<void> {
 async function showWalletData(chatId: number): Promise<void> {
   try {
     // Get wallet data from service
-    const walletData = await getWalletData();
+    const walletData = await getWalletData(WALLET_ID);
 
     // Mock wallet details data
     const walletDetails = {
@@ -198,37 +201,47 @@ async function showWalletData(chatId: number): Promise<void> {
 async function startSendProcess(chatId: number): Promise<void> {
   try {
     // Use the getWalletData function which returns mockWalletData
-    const walletData = await getWalletData();
-    
-    console.log('Fetched wallet data:', walletData); // Debugging log
+    const walletData = await getWalletData(WALLET_ID);
+
+    console.log("Fetched wallet data:", walletData); // Debugging log
 
     if (!walletData || walletData.length === 0) {
       throw new Error("No assets available");
     }
-    
+
     // Create an inline keyboard with available assets
-    const assetKeyboard = walletData.map(asset => [{
-      text: `${asset.asset.symbol} (${asset.availableBalance})`,
-      callback_data: `select_asset:${asset.asset.id}:${asset.asset.symbol}`
-    }]);
-    
-    userStates.set(chatId, { 
-      step: 'select_asset',
-      assets: walletData
+    const assetKeyboard = walletData.map((asset, index) => {
+      const key = `asset_${index}`;
+      assetDataMap.set(key, {
+        id: asset.asset.id,
+        symbol: asset.asset.symbol,
+        balance: asset.availableBalance,
+      });
+
+      return [
+        {
+          text: `${asset.asset.symbol} (${asset.availableBalance})`,
+          callback_data: key,
+        },
+      ];
     });
-    
+
+    userStates.set(chatId, {
+      step: "select_asset",
+      assets: walletData,
+    });
+
+    await bot.sendMessage(chatId, "Please select the asset you want to send:", {
+      reply_markup: {
+        inline_keyboard: assetKeyboard,
+      },
+    });
+  } catch (error) {
+    console.error("Error starting send process:", error);
     await bot.sendMessage(
       chatId,
-      "Please select the asset you want to send:",
-      {
-        reply_markup: {
-          inline_keyboard: assetKeyboard
-        }
-      }
+      "Sorry, there was an error fetching your assets. Please try again later."
     );
-  } catch (error) {
-    console.error('Error starting send process:', error);
-    await bot.sendMessage(chatId, 'Sorry, there was an error fetching your assets. Please try again later.');
     // Return to main menu after error
     await showWalletActions(chatId);
   }
@@ -239,21 +252,22 @@ bot.on("callback_query", async (callbackQuery) => {
   const chatId = callbackQuery.message.chat.id;
   const data = callbackQuery.data;
 
-  console.log("Callback data received:", data); // Add this line
-
   if (!data) return;
 
-  if (data.startsWith("select_asset:")) {
-    const [, assetId, symbol] = data.split(":");
+  // Retrieve asset data from the map
+  const assetData = assetDataMap.get(data);
+
+  if (assetData) {
     userStates.set(chatId, {
       step: "enter_amount",
-      assetId,
-      symbol,
+      assetId: assetData.id,
+      symbol: assetData.symbol,
+      balance: assetData.balance,
     });
 
     await bot.sendMessage(
       chatId,
-      `You selected ${symbol}. Please enter the amount you want to send:`
+      `You selected ${assetData.symbol}. Your available balance is ${assetData.balance} ${assetData.symbol}.\n\nPlease enter the amount you want to send:`
     );
   } else if (data === "confirm_send") {
     await executeSend(chatId);
@@ -388,19 +402,18 @@ async function executeSend(chatId: number): Promise<void> {
     if (response.success) {
       const data = response.data;
 
-      // Display transaction details and approval status
-      const transactionMessage =
-        `✅ *TRANSACTION SUBMITTED*\n\n` +
-        `*Transaction ID:* \`${data.id}\`\n` +
-        `*Status:* ${data.status}\n` +
-        `*Amount:* ${state.amount} ${state.symbol}\n` +
-        `*To:* \`${state.recipientAddress}\`\n\n` +
-        `Your transaction is awaiting approval from other wallet signers.\n` +
-        `Required approvals: ${data.withdrawalApprovals.length}`;
+      // Send a plain text message without any formatting
+      const transactionMessage = 
+        "✅ TRANSACTION SUBMITTED\n\n" +
+        "Transaction ID: " + data.id + "\n" +
+        "Status: " + data.status + "\n" +
+        "Amount: " + state.amount + " " + state.symbol + "\n" +
+        "To: " + state.recipientAddress + "\n\n" +
+        "Your transaction is awaiting approval from other wallet signers.\n" +
+        "Required approvals: " + data.withdrawalApprovals.length;
 
-      await bot.sendMessage(chatId, transactionMessage, {
-        parse_mode: "Markdown",
-      });
+      // No parse_mode means plain text
+      await bot.sendMessage(chatId, transactionMessage);
 
       // Clear user state
       userStates.delete(chatId);

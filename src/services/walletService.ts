@@ -1,3 +1,5 @@
+import { apiClient } from "./apiService";
+
 // Mock wallet data
 const mockWalletData = [
   {
@@ -9,7 +11,8 @@ const mockWalletData = [
       name: "Ethereum Sepolia",
       symbol: "ETH",
       decimals: 18,
-      logoUrl: "https://icons.iconarchive.com/icons/cjdowner/cryptocurrency-flat/512/Ethereum-ETH-icon.png",
+      logoUrl:
+        "https://icons.iconarchive.com/icons/cjdowner/cryptocurrency-flat/512/Ethereum-ETH-icon.png",
     },
     priceUsd: "1895.4969261030274",
     valueUsd: "2.82898866218420428495686439742",
@@ -23,7 +26,8 @@ const mockWalletData = [
       name: "Bitcoin",
       symbol: "BTC",
       decimals: 8,
-      logoUrl: "https://icons.iconarchive.com/icons/cjdowner/cryptocurrency-flat/512/Bitcoin-BTC-icon.png",
+      logoUrl:
+        "https://icons.iconarchive.com/icons/cjdowner/cryptocurrency-flat/512/Bitcoin-BTC-icon.png",
     },
     priceUsd: "34250.75",
     valueUsd: "856.26875",
@@ -37,7 +41,8 @@ const mockWalletData = [
       name: "Solana",
       symbol: "SOL",
       decimals: 9,
-      logoUrl: "https://icons.iconarchive.com/icons/cjdowner/cryptocurrency-flat/512/Solana-SOL-icon.png",
+      logoUrl:
+        "https://icons.iconarchive.com/icons/cjdowner/cryptocurrency-flat/512/Solana-SOL-icon.png",
     },
     priceUsd: "45.75",
     valueUsd: "5718.75",
@@ -50,25 +55,54 @@ const mockAllocationData = {
   midCap: 13,
   lowCap: 24,
   microCap: 2,
-  stablecoin: 0
+  stablecoin: 0,
 };
 
-// Function to get wallet data
-export async function getWalletData() {
-  // In a real implementation, this would fetch data from an API
-  // For now, return mock data
-  return mockWalletData;
+// Define the interface for wallet data
+interface WalletData {
+  balance: string;
+  onHold: string;
+  availableBalance: string;
+  asset: {
+    id: string;
+    name: string;
+    symbol: string;
+    decimals: number;
+    logoUrl: string;
+  };
+  priceUsd: string;
+  valueUsd: string;
+}
+
+// Function to get wallet data from API
+export async function getWalletData(walletId: string): Promise<WalletData[]> {
+  try {
+    const response = await apiClient.get(
+      `/wallets/${walletId}/overview?offset=0&limit=10`
+    );
+    if (response.data.success) {
+      return response.data.data;
+    } else {
+      throw new Error("Failed to fetch wallet data");
+    }
+  } catch (error) {
+    console.error("Error fetching wallet data:", error);
+    throw error;
+  }
 }
 
 // Function to calculate asset distribution for allocation chart
 export function calculateAssetDistribution() {
   // Calculate total portfolio value
-  const totalValue = mockWalletData.reduce((sum, asset) => sum + parseFloat(asset.valueUsd), 0);
-  
+  const totalValue = mockWalletData.reduce(
+    (sum, asset) => sum + parseFloat(asset.valueUsd),
+    0
+  );
+
   // Generate distribution data for each asset
-  return mockWalletData.map(asset => ({
+  return mockWalletData.map((asset) => ({
     name: asset.asset.symbol,
-    percentage: Math.round((parseFloat(asset.valueUsd) / totalValue) * 100)
+    percentage: Math.round((parseFloat(asset.valueUsd) / totalValue) * 100),
   }));
 }
 
@@ -82,4 +116,5 @@ export async function getPortfolioAllocation() {
 export async function fetchWalletData(walletAddress: string) {
   // TODO: Replace with actual API call
   return mockWalletData;
-} 
+}
+
