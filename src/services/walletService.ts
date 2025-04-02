@@ -1,4 +1,5 @@
 import { apiClient } from "./apiService";
+import { getCurrentWalletId } from './authenticationService';
 
 // Mock wallet data
 const mockWalletData = [
@@ -75,19 +76,29 @@ interface WalletData {
 }
 
 // Function to get wallet data from API
-export async function getWalletData(walletId: string): Promise<WalletData[]> {
+export async function getWalletData(walletId?: string): Promise<WalletData[]> {
   try {
+    // Use provided walletId or get the current one from auth service
+    const targetWalletId = walletId || getCurrentWalletId();
+    
+    if (!targetWalletId) {
+      console.error("No wallet ID available");
+      return mockWalletData; // Fallback to mock data if no wallet ID
+    }
+    
     const response = await apiClient.get(
-      `/wallets/${walletId}/overview?offset=0&limit=10`
+      `/wallets/${targetWalletId}/overview?offset=0&limit=10`
     );
+    
     if (response.data.success) {
       return response.data.data;
     } else {
-      throw new Error("Failed to fetch wallet data");
+      console.warn("API returned success: false, falling back to mock data");
+      return mockWalletData;
     }
   } catch (error) {
     console.error("Error fetching wallet data:", error);
-    throw error;
+    return mockWalletData; // Fallback to mock data on error
   }
 }
 

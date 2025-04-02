@@ -10,6 +10,17 @@ import {
   createAllocationChart,
 } from "./utils/chartGenerator";
 import { createWithdrawal } from "./services/apiService";
+import {
+  startBotAuthentication,
+  pollForToken,
+  getCurrentWalletId,
+  isAuthenticated,
+  initializeAuthentication,
+  getWorkspaces,
+  getWorkspaceWallets,
+  setCurrentWorkspace,
+  setCurrentWalletId,
+} from "./services/authenticationService";
 
 // Load environment variables
 dotenv.config();
@@ -20,11 +31,14 @@ const bot = new TelegramBot(process.env.BOT_TOKEN || "", { polling: true });
 // Store user states for multi-step processes
 const userStates = new Map();
 
-// Wallet ID (should be stored per user in a real application)
-const WALLET_ID = "6889a826-ac1e-4354-a150-66d6c4cfe97c";
+// Initialize authentication service
+initializeAuthentication();
 
 // Create a map to store asset data with a unique key
-const assetDataMap = new Map<string, { id: string; symbol: string; balance: string }>();
+const assetDataMap = new Map<
+  string,
+  { id: string; symbol: string; balance: string }
+>();
 
 // Start command handler
 bot.onText(/\/start/, async (msg) => {
@@ -45,6 +59,70 @@ bot.onText(/\/start/, async (msg) => {
   userStates.delete(msg.chat.id);
 });
 
+// New authenticate command handler
+bot.onText(/\/authenticate/, async (msg) => {
+  const chatId = msg.chat.id;
+
+  try {
+    // Start authentication process
+    await bot.sendMessage(chatId, "Starting wallet authentication process...");
+    const { verificationCode, sessionRequestId } =
+      await startBotAuthentication();
+
+    await bot.sendMessage(
+      chatId,
+      `Please enter this verification code on the wallet dashboard:\n\n` +
+        `*${verificationCode}*\n\n` +
+        `Visit https://wallet.example.com/authenticate to complete the process.`,
+      { parse_mode: "Markdown" }
+    );
+
+    // Start polling for token
+    pollForToken(sessionRequestId, async (token) => {
+      await bot.sendMessage(chatId, `✅ Wallet authenticated successfully!`);
+
+      // Get available workspaces after authentication
+      try {
+        const workspaces = await getWorkspaces();
+
+        if (workspaces.length === 0) {
+          await bot.sendMessage(
+            chatId,
+            "No workspaces found for your account. Please create a workspace first."
+          );
+          return;
+        }
+
+        // Create workspace selection keyboard
+        const workspaceKeyboard = workspaces.map((workspace) => [
+          {
+            text: workspace.name,
+            callback_data: `ws_${workspace.id}`,
+          },
+        ]);
+
+        await bot.sendMessage(chatId, "Please select a workspace:", {
+          reply_markup: {
+            inline_keyboard: workspaceKeyboard,
+          },
+        });
+      } catch (error) {
+        console.error("Error fetching workspaces:", error);
+        await bot.sendMessage(
+          chatId,
+          "❌ Error fetching workspaces. Please try again later."
+        );
+      }
+    });
+  } catch (error) {
+    console.error("Authentication error:", error);
+    await bot.sendMessage(
+      chatId,
+      "❌ Sorry, there was an error starting the authentication process. Please try again later."
+    );
+  }
+});
+
 // Handle messages
 bot.on("message", async (msg) => {
   if (!msg.text) return;
@@ -60,24 +138,39 @@ bot.on("message", async (msg) => {
   }
 
   if (msg.text === "💼 Connect Wallet") {
-    await bot.sendMessage(
-      chatId,
-      "Generating QR code for wallet connection..."
-    );
-
-    // Generate QR code
-    const imageBuffer = await generateQRCode("wallet-connection-data");
-    await bot.sendPhoto(chatId, imageBuffer);
-
-    // Simulate scanning process
-    setTimeout(async () => {
-      await bot.sendMessage(chatId, "✅ Wallet connected successfully!");
-
-      // Show wallet actions
-      await showWalletActions(chatId);
-    }, 3000);
+    if (isAuthenticated()) {
+      await bot.sendMessage(
+        chatId,
+        "You already have a connected wallet. Do you want to connect a different one?",
+        {
+          reply_markup: {
+            inline_keyboard: [
+              [
+                {
+                  text: "Yes, connect new wallet",
+                  callback_data: "new_wallet",
+                },
+                {
+                  text: "No, use current wallet",
+                  callback_data: "use_current",
+                },
+              ],
+            ],
+          },
+        }
+      );
+    } else {
+      await startAuthenticationFlow(chatId);
+    }
   } else if (msg.text === "📊 Monitor Wallet") {
-    await showWalletData(chatId);
+    if (!isAuthenticated()) {
+      await bot.sendMessage(
+        chatId,
+        "You need to connect a wallet first. Use the 'Connect Wallet' option to get started."
+      );
+    } else {
+      await showWalletData(chatId);
+    }
   } else if (msg.text === "💸 Send") {
     await startSendProcess(chatId);
   } else if (msg.text === "🔄 Swap") {
@@ -106,8 +199,8 @@ async function showWalletActions(chatId: number): Promise<void> {
 // Function to display wallet data
 async function showWalletData(chatId: number): Promise<void> {
   try {
-    // Get wallet data from service
-    const walletData = await getWalletData(WALLET_ID);
+    // Get wallet data from service using the current wallet ID
+    const walletData = await getWalletData();
 
     // Mock wallet details data
     const walletDetails = {
@@ -201,7 +294,7 @@ async function showWalletData(chatId: number): Promise<void> {
 async function startSendProcess(chatId: number): Promise<void> {
   try {
     // Use the getWalletData function which returns mockWalletData
-    const walletData = await getWalletData(WALLET_ID);
+    const walletData = await getWalletData();
 
     console.log("Fetched wallet data:", walletData); // Debugging log
 
@@ -254,10 +347,63 @@ bot.on("callback_query", async (callbackQuery) => {
 
   if (!data) return;
 
-  // Retrieve asset data from the map
-  const assetData = assetDataMap.get(data);
+  // Handle workspace selection
+  if (data.startsWith("ws_")) {
+    const workspaceId = data.substring(3); // Remove 'ws_' prefix
 
-  if (assetData) {
+    // Set the current workspace
+    setCurrentWorkspace(workspaceId);
+
+    try {
+      // Fetch wallets for the selected workspace
+      const wallets = await getWorkspaceWallets(workspaceId);
+
+      if (wallets.length === 0) {
+        await bot.sendMessage(
+          chatId,
+          "No wallets found in this workspace. Please create a wallet first."
+        );
+        return;
+      }
+
+      // Create wallet selection keyboard
+      const walletKeyboard = wallets.map((wallet) => [
+        {
+          text: `${wallet.name} (${wallet.walletType})`,
+          callback_data: `wallet_${wallet.id}`,
+        },
+      ]);
+
+      await bot.sendMessage(chatId, "Please select a wallet:", {
+        reply_markup: {
+          inline_keyboard: walletKeyboard,
+        },
+      });
+    } catch (error) {
+      console.error("Error fetching wallets:", error);
+      await bot.sendMessage(
+        chatId,
+        "❌ Error fetching wallets. Please try again later."
+      );
+    }
+  }
+  // Handle wallet selection
+  else if (data.startsWith("wallet_")) {
+    const walletId = data.substring(7); // Remove 'wallet_' prefix
+
+    // Set the current wallet ID
+    setCurrentWalletId(walletId);
+
+    await bot.sendMessage(chatId, "✅ Wallet connected successfully!");
+
+    // Show wallet actions after successful wallet selection
+    await showWalletActions(chatId);
+  }
+  // Handle existing asset data case
+  else if (assetDataMap.get(data)) {
+    // Existing code for handling asset selection
+    const assetData = assetDataMap.get(data);
+
     userStates.set(chatId, {
       step: "enter_amount",
       assetId: assetData.id,
@@ -269,11 +415,17 @@ bot.on("callback_query", async (callbackQuery) => {
       chatId,
       `You selected ${assetData.symbol}. Your available balance is ${assetData.balance} ${assetData.symbol}.\n\nPlease enter the amount you want to send:`
     );
-  } else if (data === "confirm_send") {
+  }
+  // Handle other existing cases
+  else if (data === "confirm_send") {
     await executeSend(chatId);
   } else if (data === "cancel_send") {
     userStates.delete(chatId);
     await bot.sendMessage(chatId, "Transaction cancelled.");
+    await showWalletActions(chatId);
+  } else if (data === "new_wallet") {
+    await startAuthenticationFlow(chatId);
+  } else if (data === "use_current") {
     await showWalletActions(chatId);
   }
 
@@ -392,8 +544,15 @@ async function executeSend(chatId: number): Promise<void> {
   try {
     await bot.sendMessage(chatId, "Processing your transaction...");
 
+    // Get the current wallet ID
+    const walletId = getCurrentWalletId();
+
+    if (!walletId) {
+      throw new Error("No authenticated wallet available");
+    }
+
     const response = await createWithdrawal(
-      WALLET_ID,
+      walletId,
       state.assetId,
       state.amount,
       state.recipientAddress
@@ -403,14 +562,25 @@ async function executeSend(chatId: number): Promise<void> {
       const data = response.data;
 
       // Send a plain text message without any formatting
-      const transactionMessage = 
+      const transactionMessage =
         "✅ TRANSACTION SUBMITTED\n\n" +
-        "Transaction ID: " + data.id + "\n" +
-        "Status: " + data.status + "\n" +
-        "Amount: " + state.amount + " " + state.symbol + "\n" +
-        "To: " + state.recipientAddress + "\n\n" +
+        "Transaction ID: " +
+        data.id +
+        "\n" +
+        "Status: " +
+        data.status +
+        "\n" +
+        "Amount: " +
+        state.amount +
+        " " +
+        state.symbol +
+        "\n" +
+        "To: " +
+        state.recipientAddress +
+        "\n\n" +
         "Your transaction is awaiting approval from other wallet signers.\n" +
-        "Required approvals: " + data.withdrawalApprovals.length;
+        "Required approvals: " +
+        data.withdrawalApprovals.length;
 
       // No parse_mode means plain text
       await bot.sendMessage(chatId, transactionMessage);
@@ -452,6 +622,35 @@ function getAssetEmoji(symbol: string): string {
   };
 
   return emojiMap[symbol] || "🪙";
+}
+
+// Function to start the authentication flow
+async function startAuthenticationFlow(chatId: number): Promise<void> {
+  try {
+    // Start authentication process
+    await bot.sendMessage(chatId, "Starting wallet authentication process...");
+    const { verificationCode, sessionRequestId } =
+      await startBotAuthentication();
+
+    await bot.sendMessage(
+      chatId,
+      `Please enter this verification code on the wallet dashboard:\n\n` +
+        `*${verificationCode}*\n\n` +
+        `Visit https://wallet.example.com/authenticate to complete the process.`,
+      { parse_mode: "Markdown" }
+    );
+
+    // Start polling for token - updated to just pass token param
+    pollForToken(sessionRequestId, async (token) => {
+      // The workspace selection flow will be handled inside the pollForToken callback
+    });
+  } catch (error) {
+    console.error("Authentication error:", error);
+    await bot.sendMessage(
+      chatId,
+      "❌ Sorry, there was an error starting the authentication process. Please try again later."
+    );
+  }
 }
 
 // Enable graceful stop
