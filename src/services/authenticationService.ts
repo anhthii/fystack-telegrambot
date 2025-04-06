@@ -212,7 +212,10 @@ export async function startBotAuthentication(): Promise<{
   };
 
   try {
-    const response = await apiClient.post("/authentication/cli/start", payload);
+    const response = await apiClient.post(
+      "/authentication/session-requests/start",
+      payload
+    );
     const data = response.data as AuthResponse;
 
     console.log("data success", data);
@@ -237,7 +240,7 @@ async function checkAuthenticationStatus(
 ): Promise<AuthStatusResponse> {
   try {
     const response = await apiClient.get(
-      `/authentication/cli/status/${sessionRequestId}`
+      `/authentication/session-requests/status/${sessionRequestId}`
     );
     return response.data as AuthStatusResponse;
   } catch (error) {
@@ -253,7 +256,7 @@ async function checkAuthenticationStatus(
  */
 export async function pollForToken(
   sessionRequestId: string,
-  onComplete: (token: string) => void
+  onComplete: (token: string) => Promise<void>
 ): Promise<void> {
   const pollInterval = 5000; // 5 seconds
   console.log("Polling for authentication status...");
@@ -270,6 +273,7 @@ export async function pollForToken(
         statusData.data.accessToken &&
         statusData.data.encryptedKey
       ) {
+        console.log("IM inside here");
         const decryptedToken = await decryptTokenPayload(statusData.data);
 
         // Store the authentication data
@@ -278,8 +282,12 @@ export async function pollForToken(
         // Set the token in the API client auth header
         updateApiClientAuthHeader(decryptedToken);
 
+        try {
+          await onComplete(decryptedToken);
+        } catch (err) {
+          console.error("err", err);
+        }
         // Call the completion callback
-        onComplete(decryptedToken);
 
         return;
       }
@@ -293,7 +301,7 @@ export async function pollForToken(
   };
 
   // Start polling
-  poll();
+  await poll();
 }
 
 /**
