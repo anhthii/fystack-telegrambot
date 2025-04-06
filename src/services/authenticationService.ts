@@ -205,7 +205,7 @@ export async function startBotAuthentication(): Promise<{
     deviceName: os.hostname(),
     deviceUserName: os.userInfo().username,
     deviceOs: os.platform(),
-    platform: "cli",
+    platform: "telegram",
     botVersion: "1.0.0",
     durationInSeconds: 86400, // 24 hours
     publicKey: publicKeyBase64,

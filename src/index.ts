@@ -62,65 +62,7 @@ bot.onText(/\/start/, async (msg) => {
 // New authenticate command handler
 bot.onText(/\/authenticate/, async (msg) => {
   const chatId = msg.chat.id;
-
-  try {
-    // Start authentication process
-    await bot.sendMessage(chatId, "Starting wallet authentication process...");
-    const { verificationCode, sessionRequestId } =
-      await startBotAuthentication();
-
-    await bot.sendMessage(
-      chatId,
-      `Please enter this verification code on the wallet dashboard:\n\n` +
-        `*${verificationCode}*\n\n` +
-        `Visit https://wallet.example.com/authenticate to complete the process.`,
-      { parse_mode: "Markdown" }
-    );
-
-    // Start polling for token
-    pollForToken(sessionRequestId, async (token) => {
-      await bot.sendMessage(chatId, `✅ Wallet authenticated successfully!`);
-
-      // Get available workspaces after authentication
-      try {
-        const workspaces = await getWorkspaces();
-
-        if (workspaces.length === 0) {
-          await bot.sendMessage(
-            chatId,
-            "No workspaces found for your account. Please create a workspace first."
-          );
-          return;
-        }
-
-        // Create workspace selection keyboard
-        const workspaceKeyboard = workspaces.map((workspace) => [
-          {
-            text: workspace.name,
-            callback_data: `ws_${workspace.id}`,
-          },
-        ]);
-
-        await bot.sendMessage(chatId, "Please select a workspace:", {
-          reply_markup: {
-            inline_keyboard: workspaceKeyboard,
-          },
-        });
-      } catch (error) {
-        console.error("Error fetching workspaces:", error);
-        await bot.sendMessage(
-          chatId,
-          "❌ Error fetching workspaces. Please try again later."
-        );
-      }
-    });
-  } catch (error) {
-    console.error("Authentication error:", error);
-    await bot.sendMessage(
-      chatId,
-      "❌ Sorry, there was an error starting the authentication process. Please try again later."
-    );
-  }
+  await startAuthenticationFlow(chatId);
 });
 
 // Handle messages
@@ -578,9 +520,7 @@ async function executeSend(chatId: number): Promise<void> {
         "To: " +
         state.recipientAddress +
         "\n\n" +
-        "Your transaction is awaiting approval from other wallet signers.\n" +
-        "Required approvals: " +
-        data.withdrawalApprovals.length;
+        "Your transaction is awaiting approval from other wallet signers.\n";
 
       // No parse_mode means plain text
       await bot.sendMessage(chatId, transactionMessage);
@@ -624,31 +564,86 @@ function getAssetEmoji(symbol: string): string {
   return emojiMap[symbol] || "🪙";
 }
 
-// Function to start the authentication flow
-async function startAuthenticationFlow(chatId: number): Promise<void> {
+// Reusable function for starting the authentication flow
+async function startAuthenticationFlow(
+  chatId: number,
+  onAuthSuccess?: (token: string) => Promise<void>
+): Promise<void> {
   try {
     // Start authentication process
     await bot.sendMessage(chatId, "Starting wallet authentication process...");
     const { verificationCode, sessionRequestId } =
       await startBotAuthentication();
 
+    // Generate QR code containing auth data
+    const qrData = `sessionRequestId=${sessionRequestId}&verificationCode=${verificationCode}`;
+    const qrCodePath = await generateQRCode(qrData);
+
+    // Send QR code image to user
+    await bot.sendPhoto(chatId, qrCodePath, {
+      caption: "Scan this QR code to authenticate your wallet",
+    });
+
+    // Also send verification code as text for manual entry
     await bot.sendMessage(
       chatId,
-      `Please enter this verification code on the wallet dashboard:\n\n` +
+      `Or enter this verification code on the wallet dashboard:\n\n` +
         `*${verificationCode}*\n\n` +
         `Visit https://wallet.example.com/authenticate to complete the process.`,
       { parse_mode: "Markdown" }
     );
 
-    // Start polling for token - updated to just pass token param
+    // Start polling for token
     pollForToken(sessionRequestId, async (token) => {
-      // The workspace selection flow will be handled inside the pollForToken callback
+      await bot.sendMessage(chatId, `✅ Wallet authenticated successfully!`);
+
+      // Execute custom callback if provided, otherwise show workspace selection
+      if (onAuthSuccess) {
+        await onAuthSuccess(token);
+      } else {
+        await showWorkspaceSelection(chatId);
+      }
     });
   } catch (error) {
     console.error("Authentication error:", error);
     await bot.sendMessage(
       chatId,
       "❌ Sorry, there was an error starting the authentication process. Please try again later."
+    );
+  }
+}
+
+// Function to show workspace selection
+async function showWorkspaceSelection(chatId: number): Promise<void> {
+  try {
+    const workspaces = await getWorkspaces();
+
+    if (workspaces.length === 0) {
+      await bot.sendMessage(
+        chatId,
+        "No workspaces found for your account. Please create a workspace first."
+      );
+      return;
+    }
+
+    // Create workspace selection keyboard
+    const workspaceKeyboard = workspaces.map((workspace) => [
+      {
+        text: workspace.name,
+        callback_data: `ws_${workspace.id}`,
+      },
+    ]);
+
+    await bot.sendMessage(chatId, "Please select a workspace:", {
+      reply_markup: {
+        inline_keyboard: workspaceKeyboard,
+      },
+    });
+  } catch (error) {
+    console.error("Error fetching workspaces:", error);
+    await bot.sendMessage(
+      chatId,
+      "❌ Error fetching workspaces. Please try again later."
     );
   }
 }
