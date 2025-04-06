@@ -21,6 +21,7 @@ import {
   setCurrentWorkspace,
   setCurrentWalletId,
 } from "./services/authenticationService";
+import { performAddressRiskCheck } from "./services/riskCheckService";
 
 // Load environment variables
 dotenv.config();
@@ -449,29 +450,89 @@ async function handleAddressInput(
     return;
   }
 
-  // Update state with the address
-  state.recipientAddress = recipientAddress;
-  userStates.set(chatId, state);
+  // Send loading message
+  const loadingMessage = await bot.sendMessage(
+    chatId,
+    "🔍 Performing risk check on address...\nThis may take a moment."
+  );
 
-  // Show confirmation message
-  const confirmationMessage =
-    `📤 *TRANSACTION DETAILS*\n\n` +
-    `*Asset:* ${state.symbol}\n` +
-    `*Amount:* ${state.amount} ${state.symbol}\n` +
-    `*To:* \`${recipientAddress}\`\n\n` +
-    `Please confirm this transaction.`;
+  try {
+    // Perform risk check and get results
+    const riskCheckResults = await performAddressRiskCheck(recipientAddress);
+    
+    // Send the risk check results screenshot with risk score information
+    await bot.sendPhoto(
+      chatId, 
+      riskCheckResults.screenshotPath, 
+      { 
+        caption: `📊 Risk Analysis Results:\n\n` +
+                 `Risk Score: ${riskCheckResults.riskScore}\n` +
+                 `Assessment: ${riskCheckResults.riskCategory}`
+      }
+    );
+    
+    // Delete loading message
+    await bot.deleteMessage(chatId, loadingMessage.message_id);
+    
+    // Update state with the address
+    state.recipientAddress = recipientAddress;
+    userStates.set(chatId, state);
 
-  await bot.sendMessage(chatId, confirmationMessage, {
-    parse_mode: "Markdown",
-    reply_markup: {
-      inline_keyboard: [
-        [
-          { text: "✅ Confirm", callback_data: "confirm_send" },
-          { text: "❌ Cancel", callback_data: "cancel_send" },
+    // Show confirmation message
+    const confirmationMessage =
+      `📤 *TRANSACTION DETAILS*\n\n` +
+      `*Asset:* ${state.symbol}\n` +
+      `*Amount:* ${state.amount} ${state.symbol}\n` +
+      `*To:* \`${recipientAddress}\`\n` +
+      `*Risk Assessment:* ${riskCheckResults.riskCategory}\n\n` +
+      `Please confirm this transaction.`;
+
+    await bot.sendMessage(chatId, confirmationMessage, {
+      parse_mode: "Markdown",
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: "✅ Confirm", callback_data: "confirm_send" },
+            { text: "❌ Cancel", callback_data: "cancel_send" },
+          ],
         ],
-      ],
-    },
-  });
+      },
+    });
+  } catch (error) {
+    console.error("Error performing risk check:", error);
+    
+    // Delete loading message
+    await bot.deleteMessage(chatId, loadingMessage.message_id);
+    
+    // Notify the user about the error but allow them to proceed
+    await bot.sendMessage(
+      chatId,
+      "⚠️ Could not perform risk check on this address. Proceed with caution."
+    );
+    
+    // Continue with the transaction flow
+    state.recipientAddress = recipientAddress;
+    userStates.set(chatId, state);
+
+    const confirmationMessage =
+      `📤 *TRANSACTION DETAILS*\n\n` +
+      `*Asset:* ${state.symbol}\n` +
+      `*Amount:* ${state.amount} ${state.symbol}\n` +
+      `*To:* \`${recipientAddress}\`\n\n` +
+      `Please confirm this transaction.`;
+
+    await bot.sendMessage(chatId, confirmationMessage, {
+      parse_mode: "Markdown",
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: "✅ Confirm", callback_data: "confirm_send" },
+            { text: "❌ Cancel", callback_data: "cancel_send" },
+          ],
+        ],
+      },
+    });
+  }
 }
 
 // Execute the send transaction
