@@ -8,6 +8,9 @@ import { apiClient } from "./apiService";
 const API_BASE_URL =
   process.env.API_BASE_URL || "https://apex.void.exchange/api/v1";
 
+// File path for storing authentication state (in project root folder)
+const AUTH_STATE_FILE = path.join(process.cwd(), "auth_state.json");
+
 // Interface for auth response
 interface AuthResponse {
   success: boolean;
@@ -55,6 +58,64 @@ interface Wallet {
 let currentWalletId: string | null = null;
 let currentAccessToken: string | null = null;
 let currentWorkspaceId: string | null = null;
+
+/**
+ * Save authentication state to file
+ */
+function saveAuthState(): void {
+  try {
+    const authState = {
+      currentWalletId,
+      currentAccessToken,
+      currentWorkspaceId,
+      timestamp: new Date().toISOString(),
+    };
+    
+    fs.writeFileSync(AUTH_STATE_FILE, JSON.stringify(authState, null, 2));
+    console.log("Authentication state saved to file in project root");
+  } catch (error) {
+    console.error("Error saving authentication state:", error);
+  }
+}
+
+/**
+ * Load authentication state from file
+ */
+function loadAuthState(): void {
+  try {
+    if (fs.existsSync(AUTH_STATE_FILE)) {
+      const data = fs.readFileSync(AUTH_STATE_FILE, 'utf8');
+      const authState = JSON.parse(data);
+      
+      // Only restore if the token is not expired (adding 24h duration check)
+      const storedTime = new Date(authState.timestamp).getTime();
+      const currentTime = new Date().getTime();
+      const oneDayMs = 24 * 60 * 60 * 1000;
+      
+      if (currentTime - storedTime < oneDayMs) {
+        currentWalletId = authState.currentWalletId;
+        currentAccessToken = authState.currentAccessToken;
+        currentWorkspaceId = authState.currentWorkspaceId;
+        
+        // Update API client with the loaded token
+        if (currentAccessToken) {
+          updateApiClientAuthHeader(currentAccessToken);
+        }
+        
+        console.log("Authentication state loaded from project root");
+        return;
+      }
+      console.log("Stored authentication is expired");
+    }
+  } catch (error) {
+    console.error("Error loading authentication state:", error);
+  }
+  
+  // Initialize with empty values if loading fails
+  currentWalletId = null;
+  currentAccessToken = null;
+  currentWorkspaceId = null;
+}
 
 /**
  * Get or create RSA key pair for bot authentication
@@ -278,6 +339,9 @@ export async function pollForToken(
 
         // Store the authentication data
         currentAccessToken = decryptedToken;
+        
+        // Save state after getting new token
+        saveAuthState();
 
         // Set the token in the API client auth header
         updateApiClientAuthHeader(decryptedToken);
@@ -327,6 +391,7 @@ export async function getWorkspaces(): Promise<Workspace[]> {
  */
 export function setCurrentWorkspace(workspaceId: string): void {
   currentWorkspaceId = workspaceId;
+  saveAuthState(); // Save after updating
 }
 
 /**
@@ -362,6 +427,7 @@ export async function getWorkspaceWallets(
  */
 export function setCurrentWalletId(walletId: string): void {
   currentWalletId = walletId;
+  saveAuthState(); // Save after updating
 }
 
 /**
@@ -382,14 +448,17 @@ export function getCurrentAccessToken(): string | null {
  * Initialize authentication with saved credentials if available
  */
 export function initializeAuthentication(): void {
-  // This could be extended to load saved credentials from a secure storage
   console.log("Initializing authentication service...");
-
-  // For now, we'll just rely on the authentication flow to set up credentials
+  
+  // Load saved state from file
+  loadAuthState();
+  
   if (!currentWalletId || !currentAccessToken) {
     console.log(
       "No authentication credentials found. Will need to authenticate."
     );
+  } else {
+    console.log("Loaded existing authentication credentials");
   }
 }
 
