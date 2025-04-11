@@ -4,6 +4,8 @@ import { generateQRCode } from "./utils/qrCode";
 import {
   getWalletData,
   getPortfolioAllocation,
+  convertToSmallestUnit,
+  convertFromSmallestUnit,
 } from "./services/walletService";
 import {
   createBalanceChart,
@@ -32,7 +34,13 @@ import {
 dotenv.config();
 
 // Initialize bot with token from environment variables
-const bot = new TelegramBot(process.env.BOT_TOKEN || "", { polling: true });
+const bot = new TelegramBot(process.env.BOT_TOKEN || "", { 
+  polling: true,
+  onlyFirstMatch: true,
+  request: {
+    timeout: 30000
+  }
+});
 
 // Store user states for multi-step processes
 const userStates = new Map();
@@ -132,6 +140,15 @@ bot.on("message", async (msg) => {
     }
   } else if (msg.text === "🏠 Main Menu") {
     await showWalletActions(chatId);
+  } else if (msg.text === "🔀 Change Wallet") {
+    if (!isAuthenticated()) {
+      await bot.sendMessage(
+        chatId,
+        "You need to connect a wallet first. Use the 'Connect Wallet' option to get started."
+      );
+    } else {
+      await showWorkspaceSelection(chatId);
+    }
   }
 });
 
@@ -139,7 +156,10 @@ bot.on("message", async (msg) => {
 async function showWalletActions(chatId: number): Promise<void> {
   const opts = {
     reply_markup: {
-      keyboard: [["💸 Send", "🔄 Swap"], ["📊 Monitor Wallet"]],
+      keyboard: [
+        ["💸 Send", "🔄 Swap"], 
+        ["📊 Monitor Wallet", "🔀 Change Wallet"]  // Added Change Wallet option
+      ],
       resize_keyboard: true,
     },
   };
@@ -349,6 +369,17 @@ async function startSwapProcess(chatId: number): Promise<void> {
   }
 }
 
+// Utility function to safely perform Telegram API actions
+async function safeApiCall(apiCall: Promise<any>, errorMessage: string = "Operation failed"): Promise<any> {
+  try {
+    return await apiCall;
+  } catch (error) {
+    console.error(`Telegram API error: ${errorMessage}`, error);
+    // Don't throw the error, just return null to prevent app crashes
+    return null;
+  }
+}
+
 // Handle callback queries (for inline buttons)
 bot.on("callback_query", async (callbackQuery) => {
   const chatId = callbackQuery.message.chat.id;
@@ -356,188 +387,212 @@ bot.on("callback_query", async (callbackQuery) => {
 
   if (!data) return;
 
-  // Handle workspace selection
-  if (data.startsWith("ws_")) {
-    const workspaceId = data.substring(3); // Remove 'ws_' prefix
+  try {
+    // Handle workspace selection
+    if (data.startsWith("ws_")) {
+      const workspaceId = data.substring(3); // Remove 'ws_' prefix
 
-    // Set the current workspace
-    setCurrentWorkspace(workspaceId);
+      // Set the current workspace
+      setCurrentWorkspace(workspaceId);
 
-    try {
-      // Fetch wallets for the selected workspace
-      const wallets = await getWorkspaceWallets(workspaceId);
+      try {
+        // Fetch wallets for the selected workspace
+        const wallets = await getWorkspaceWallets(workspaceId);
 
-      if (wallets.length === 0) {
+        if (wallets.length === 0) {
+          await bot.sendMessage(
+            chatId,
+            "No wallets found in this workspace. Please create a wallet first."
+          );
+          return;
+        }
+
+        // Create wallet selection keyboard
+        const walletKeyboard = wallets.map((wallet) => [
+          {
+            text: `${wallet.name} (${wallet.walletType})`,
+            callback_data: `wallet_${wallet.id}`,
+          },
+        ]);
+
+        await bot.sendMessage(chatId, "Please select a wallet:", {
+          reply_markup: {
+            inline_keyboard: walletKeyboard,
+          },
+        });
+      } catch (error) {
+        console.error("Error fetching wallets:", error);
         await bot.sendMessage(
           chatId,
-          "No wallets found in this workspace. Please create a wallet first."
+          "❌ Error fetching wallets. Please try again later."
+        );
+      }
+    }
+    // Handle wallet selection
+    else if (data.startsWith("wallet_")) {
+      const walletId = data.substring(7); // Remove 'wallet_' prefix
+
+      // Set the current wallet ID
+      setCurrentWalletId(walletId);
+
+      await bot.sendMessage(chatId, "✅ Wallet connected successfully!");
+
+      // Show wallet actions after successful wallet selection
+      await showWalletActions(chatId);
+    }
+    // Handle swap from token selection
+    else if (data.startsWith("swap_from_")) {
+      const assetData = assetDataMap.get(data);
+      if (!assetData) {
+        await bot.sendMessage(
+          chatId,
+          "Selected asset not found. Please try again."
         );
         return;
       }
 
-      // Create wallet selection keyboard
-      const walletKeyboard = wallets.map((wallet) => [
-        {
-          text: `${wallet.name} (${wallet.walletType})`,
-          callback_data: `wallet_${wallet.id}`,
-        },
-      ]);
-
-      await bot.sendMessage(chatId, "Please select a wallet:", {
-        reply_markup: {
-          inline_keyboard: walletKeyboard,
-        },
+      userStates.set(chatId, {
+        step: "select_swap_to",
+        fromAssetId: assetData.id,
+        fromSymbol: assetData.symbol,
+        fromBalance: assetData.balance,
       });
-    } catch (error) {
-      console.error("Error fetching wallets:", error);
-      await bot.sendMessage(
-        chatId,
-        "❌ Error fetching wallets. Please try again later."
-      );
-    }
-  }
-  // Handle wallet selection
-  else if (data.startsWith("wallet_")) {
-    const walletId = data.substring(7); // Remove 'wallet_' prefix
 
-    // Set the current wallet ID
-    setCurrentWalletId(walletId);
+      // Define common tokens for easier selection
+      const commonTokens = [
+        { symbol: "SOL", name: "Solana" },
+        { symbol: "USDC", name: "USD Coin" },
+        { symbol: "BTC", name: "Bitcoin (Wrapped)" },
+      ];
 
-    await bot.sendMessage(chatId, "✅ Wallet connected successfully!");
+      // Create buttons for common tokens
+      const tokenKeyboard = commonTokens
+        .filter((token) => token.symbol !== assetData.symbol) // Don't show the token they're swapping from
+        .map((token) => [
+          {
+            text: `${token.symbol} (${token.name})`,
+            callback_data: `swap_to_${token.symbol}`,
+          },
+        ]);
 
-    // Show wallet actions after successful wallet selection
-    await showWalletActions(chatId);
-  }
-  // Handle swap from token selection
-  else if (data.startsWith("swap_from_")) {
-    const assetData = assetDataMap.get(data);
-    if (!assetData) {
-      await bot.sendMessage(
-        chatId,
-        "Selected asset not found. Please try again."
-      );
-      return;
-    }
-
-    userStates.set(chatId, {
-      step: "select_swap_to",
-      fromAssetId: assetData.id,
-      fromSymbol: assetData.symbol,
-      fromBalance: assetData.balance,
-    });
-
-    // Define common tokens for easier selection
-    const commonTokens = [
-      { symbol: "SOL", name: "Solana" },
-      { symbol: "USDC", name: "USD Coin" },
-      { symbol: "BTC", name: "Bitcoin (Wrapped)" },
-    ];
-
-    // Create buttons for common tokens
-    const tokenKeyboard = commonTokens
-      .filter((token) => token.symbol !== assetData.symbol) // Don't show the token they're swapping from
-      .map((token) => [
+      // Add a custom token option
+      tokenKeyboard.push([
         {
-          text: `${token.symbol} (${token.name})`,
-          callback_data: `swap_to_${token.symbol}`,
+          text: "Enter custom token address",
+          callback_data: "swap_to_custom",
         },
       ]);
 
-    // Add a custom token option
-    tokenKeyboard.push([
-      {
-        text: "Enter custom token address",
-        callback_data: "swap_to_custom",
-      },
-    ]);
-
-    await bot.sendMessage(
-      chatId,
-      `You selected ${assetData.symbol} to swap from. Please select the token you want to swap to:`,
-      {
-        reply_markup: {
-          inline_keyboard: tokenKeyboard,
-        },
-      }
-    );
-  }
-  // Handle swap to token selection (predefined tokens)
-  else if (data.startsWith("swap_to_")) {
-    const tokenSymbol = data.substring(8); // Remove 'swap_to_' prefix
-    const state = userStates.get(chatId);
-
-    if (tokenSymbol === "custom") {
-      // User wants to enter a custom token address
-      state.step = "enter_swap_to_address";
-      userStates.set(chatId, state);
-
       await bot.sendMessage(
         chatId,
-        "Please enter the token mint address you want to swap to:"
+        `You selected ${assetData.symbol} to swap from. Please select the token you want to swap to:`,
+        {
+          reply_markup: {
+            inline_keyboard: tokenKeyboard,
+          },
+        }
       );
-    } else {
-      // User selected a predefined token
-      try {
-        const tokenMint = getTokenMintAddress(tokenSymbol);
+    }
+    // Handle swap to token selection (predefined tokens)
+    else if (data.startsWith("swap_to_")) {
+      const tokenSymbol = data.substring(8); // Remove 'swap_to_' prefix
+      const state = userStates.get(chatId);
 
-        state.toSymbol = tokenSymbol;
-        state.toMint = tokenMint;
-        state.step = "enter_swap_amount";
+      if (tokenSymbol === "custom") {
+        // User wants to enter a custom token address
+        state.step = "enter_swap_to_address";
         userStates.set(chatId, state);
 
         await bot.sendMessage(
           chatId,
-          `You selected to swap from ${state.fromSymbol} to ${tokenSymbol}.\n\nPlease enter the amount of ${state.fromSymbol} you want to swap:`
+          "Please enter the token mint address you want to swap to:"
         );
-      } catch (error) {
-        console.error("Error with token selection:", error);
-        await bot.sendMessage(
-          chatId,
-          "There was an error with your token selection. Please try again."
-        );
+      } else {
+        // User selected a predefined token
+        try {
+          const tokenMint = getTokenMintAddress(tokenSymbol);
+
+          state.toSymbol = tokenSymbol;
+          state.toMint = tokenMint;
+          state.step = "enter_swap_amount";
+          userStates.set(chatId, state);
+
+          await bot.sendMessage(
+            chatId,
+            `You selected to swap from ${state.fromSymbol} to ${tokenSymbol}.\n\nPlease enter the amount of ${state.fromSymbol} you want to swap:`
+          );
+        } catch (error) {
+          console.error("Error with token selection:", error);
+          await bot.sendMessage(
+            chatId,
+            "There was an error with your token selection. Please try again."
+          );
+        }
       }
     }
-  }
-  // Handle swap confirmation
-  else if (data === "confirm_swap") {
-    await executeSwap(chatId);
-  } else if (data === "cancel_swap") {
-    userStates.delete(chatId);
-    await bot.sendMessage(chatId, "Swap cancelled.");
-    await showWalletActions(chatId);
-  }
-  // Handle existing asset data case
-  else if (assetDataMap.get(data)) {
-    // Existing code for handling asset selection
-    const assetData = assetDataMap.get(data);
+    // Handle swap confirmation
+    else if (data === "confirm_swap") {
+      await executeSwap(chatId);
+    } else if (data === "cancel_swap") {
+      userStates.delete(chatId);
+      await bot.sendMessage(chatId, "Swap cancelled.");
+      await showWalletActions(chatId);
+    }
+    // Handle existing asset data case
+    else if (assetDataMap.get(data)) {
+      // Existing code for handling asset selection
+      const assetData = assetDataMap.get(data);
 
-    userStates.set(chatId, {
-      step: "enter_amount",
-      assetId: assetData.id,
-      symbol: assetData.symbol,
-      balance: assetData.balance,
-    });
+      userStates.set(chatId, {
+        step: "enter_amount",
+        assetId: assetData.id,
+        symbol: assetData.symbol,
+        balance: assetData.balance,
+      });
 
-    await bot.sendMessage(
-      chatId,
-      `You selected ${assetData.symbol}. Your available balance is ${assetData.balance} ${assetData.symbol}.\n\nPlease enter the amount you want to send:`
+      await bot.sendMessage(
+        chatId,
+        `You selected ${assetData.symbol}. Your available balance is ${assetData.balance} ${assetData.symbol}.\n\nPlease enter the amount you want to send:`
+      );
+    }
+    // Handle other existing cases
+    else if (data === "confirm_send") {
+      await executeSend(chatId);
+    } else if (data === "cancel_send") {
+      userStates.delete(chatId);
+      await bot.sendMessage(chatId, "Transaction cancelled.");
+      await showWalletActions(chatId);
+    } else if (data === "new_wallet") {
+      await startAuthenticationFlow(chatId);
+    } else if (data === "use_current") {
+      await showWalletActions(chatId);
+    }
+
+    // Answer callback query to remove loading state - with error handling
+    await safeApiCall(
+      bot.answerCallbackQuery(callbackQuery.id),
+      "Failed to answer callback query"
     );
+  } catch (error) {
+    console.error("Error in callback query handler:", error);
+    
+    // Try to notify the user if possible
+    try {
+      await bot.sendMessage(
+        chatId, 
+        "Sorry, something went wrong. Please try the operation again."
+      );
+    } catch (innerError) {
+      console.error("Failed to send error message:", innerError);
+    }
+    
+    // Answer callback query regardless of other errors to prevent timeouts
+    try {
+      await bot.answerCallbackQuery(callbackQuery.id).catch(() => {});
+    } catch (callbackError) {
+      console.error("Failed to answer callback query:", callbackError);
+    }
   }
-  // Handle other existing cases
-  else if (data === "confirm_send") {
-    await executeSend(chatId);
-  } else if (data === "cancel_send") {
-    userStates.delete(chatId);
-    await bot.sendMessage(chatId, "Transaction cancelled.");
-    await showWalletActions(chatId);
-  } else if (data === "new_wallet") {
-    await startAuthenticationFlow(chatId);
-  } else if (data === "use_current") {
-    await showWalletActions(chatId);
-  }
-
-  // Answer callback query to remove loading state
-  await bot.answerCallbackQuery(callbackQuery.id);
 });
 
 // Handle state-specific messages
@@ -638,8 +693,11 @@ async function handleAddressInput(
         `Assessment: ${riskCheckResults.riskCategory}`,
     });
 
-    // Delete loading message
-    await bot.deleteMessage(chatId, loadingMessage.message_id);
+    // Delete loading message with safe API call
+    await safeApiCall(
+      bot.deleteMessage(chatId, loadingMessage.message_id),
+      "Failed to delete loading message"
+    );
 
     // Update state with the address
     state.recipientAddress = recipientAddress;
@@ -668,8 +726,11 @@ async function handleAddressInput(
   } catch (error) {
     console.error("Error performing risk check:", error);
 
-    // Delete loading message
-    await bot.deleteMessage(chatId, loadingMessage.message_id);
+    // Delete loading message with safe API call
+    await safeApiCall(
+      bot.deleteMessage(chatId, loadingMessage.message_id),
+      "Failed to delete loading message"
+    );
 
     // Notify the user about the error but allow them to proceed
     await bot.sendMessage(
@@ -766,10 +827,23 @@ async function handleSwapAmountInput(
   try {
     // Determine the input token mint address
     const fromMint = getTokenMintAddress(state.fromSymbol);
-
-    // Convert to smallest units (lamports for SOL, etc.)
-    // This is just a placeholder - in a real app you'd have to convert properly based on decimal places
-    const amountInSmallestUnits = Math.floor(numAmount * 1000000);
+    
+    // Get wallet data to find the decimals for this asset
+    const walletData = await getWalletData();
+    const assetInfo = walletData.find(asset => asset.asset.symbol === state.fromSymbol);
+    
+    if (!assetInfo) {
+      throw new Error(`Could not find decimal information for ${state.fromSymbol}`);
+    }
+    
+    // Get the decimals for this asset
+    const decimals = assetInfo.asset.decimals;
+    
+    // Convert to smallest units based on asset's decimal places
+    const amountInSmallestUnits = Number(convertToSmallestUnit(numAmount, decimals));
+    
+    // Store decimals for later use
+    state.fromTokenDecimals = decimals;
 
     // Get the swap quote
     const quoteResult = await getSwapQuote(
@@ -777,18 +851,41 @@ async function handleSwapAmountInput(
       state.toMint,
       amountInSmallestUnits
     );
-
-    // Delete loading message
-    await bot.deleteMessage(chatId, loadingMessage.message_id);
+    
+    // Delete loading message with safe API call
+    await safeApiCall(
+      bot.deleteMessage(chatId, loadingMessage.message_id),
+      "Failed to delete loading message"
+    );
 
     if (!quoteResult.success) {
       throw new Error(quoteResult.error || "Failed to get swap quote");
     }
 
-    // Parse the expected output amount
-    // This is simplified - in a real app you'd convert from smallest units
+    // Get decimals for the destination token if possible
+    let toTokenDecimals = 9; // Default to 9 decimals as fallback
+    const toAssetInfo = walletData.find(asset => 
+      asset.asset.symbol === state.toSymbol
+    );
+    
+    if (toAssetInfo) {
+      toTokenDecimals = toAssetInfo.asset.decimals;
+      console.log("toTokenDecimals", toTokenDecimals);
+    }
+
+
+    
+    state.toTokenDecimals = toTokenDecimals;
+
+    // Parse the expected output amount using proper decimal conversion
     const expectedOutputRaw = parseFloat(quoteResult.expectedOutput || "0");
-    const expectedOutput = (expectedOutputRaw / 1000000).toFixed(6);
+    const expectedOutput = convertFromSmallestUnit(
+      expectedOutputRaw.toString(), 
+      toTokenDecimals
+    );
+
+    console.log("expectedOutput", expectedOutput);
+    console.log("quoteResult", quoteResult);
 
     // Update state with swap details
     state.amount = amount;
@@ -821,8 +918,11 @@ async function handleSwapAmountInput(
   } catch (error) {
     console.error("Error getting swap quote:", error);
 
-    // Delete loading message
-    await bot.deleteMessage(chatId, loadingMessage.message_id);
+    // Delete loading message with safe API call
+    await safeApiCall(
+      bot.deleteMessage(chatId, loadingMessage.message_id),
+      "Failed to delete loading message"
+    );
 
     await bot.sendMessage(
       chatId,
@@ -919,7 +1019,7 @@ async function executeSwap(chatId: number): Promise<void> {
   try {
     await bot.sendMessage(chatId, "Processing your swap...");
 
-    // Execute the swap
+    // Execute the swap using the properly converted amount
     const swapResult = await executeTokenSwap(
       state.fromMint,
       state.toMint,
@@ -1060,6 +1160,12 @@ async function showWorkspaceSelection(chatId: number): Promise<void> {
     );
   }
 }
+
+// Add error handler for polling errors
+bot.on('polling_error', (error) => {
+  console.error('Polling error:', error);
+  // The bot will automatically try to reconnect
+});
 
 // Enable graceful stop
 process.once("SIGINT", () => bot.stopPolling());

@@ -7,7 +7,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
-    "watch": "nodemon --exec ts-node src/index.ts"
+    "watch": "nodemon --exec ts-node src/index.ts --ignore auth_state.json"
   },
   "dependencies": {
     "axios": "^1.6.2",
@@ -19,7 +19,12 @@
     "puppeteer": "^24.6.0",
     "qrcode": "^1.5.3",
     "snakecase-keys": "^6.0.0",
-    "uuid": "^9.0.1"
+    "uuid": "^9.0.1",
+    "@fystack/wallet-sdk": "^0.1.44",
+    "@raydium-io/raydium-sdk-v2": "0.1.115-alpha",
+    "@solana/spl-token": "^0.4.6",
+    "@solana/web3.js": "^1.95.3",
+    "bs58": "^5.0.0"
   },
   "devDependencies": {
     "@types/node": "^20.8.10",

@@ -129,3 +129,12 @@ export async function fetchWalletData(walletAddress: string) {
   return mockWalletData;
 }
 
+// Add a utility function to convert amounts based on asset decimals
+export function convertToSmallestUnit(amount: number, decimals: number): bigint {
+  return BigInt(Math.floor(amount * 10 ** decimals));
+}
+
+export function convertFromSmallestUnit(amount: string, decimals: number): string {
+  // Convert from smallest unit (like lamports) back to human-readable format
+  return (Number(amount) / 10 ** decimals).toFixed(decimals);
+}
