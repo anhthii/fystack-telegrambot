@@ -70,9 +70,23 @@ interface WalletData {
     symbol: string;
     decimals: number;
     logoUrl: string;
+    network?: {
+      id: string;
+      name: string;
+      internalCode?: string;
+      chainId?: number;
+      logoUrl?: string;
+    }
   };
   priceUsd: string;
   valueUsd: string;
+  network?: {
+    id: string;
+    name: string;
+    chainId?: number;
+    internalCode?: string;
+    logoUrl?: string;
+  }
 }
 
 // Function to get wallet data from API

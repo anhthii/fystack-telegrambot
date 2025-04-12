@@ -237,10 +237,11 @@ async function showWalletData(chatId: number): Promise<void> {
       const usdValue = parseFloat(asset.valueUsd);
       const percentage = (usdValue / totalUsdValue) * 100;
       const assetEmoji = getAssetEmoji(asset.asset.symbol);
+      const networkName = asset.network ? ` (${asset.network.name})` : '';
 
       assetsMessage += `${index + 1}. ${assetEmoji} *${asset.asset.name}* (${
         asset.asset.symbol
-      })\n`;
+      })${networkName}\n`;
       assetsMessage += `   • Amount: \`${asset.balance}\` ${asset.asset.symbol}\n`;
       assetsMessage += `   • Value: \`$${usdValue.toFixed(2)}\` USD\n`;
       assetsMessage += `   • Portfolio: \`${percentage.toFixed(2)}%\`\n\n`;
@@ -287,9 +288,12 @@ async function startSendProcess(chatId: number): Promise<void> {
         balance: asset.availableBalance,
       });
 
+      // Add network information if available
+      const networkInfo = asset.network ? ` (${asset.asset.network.name})` : '';
+
       return [
         {
-          text: `${asset.asset.symbol} (${asset.availableBalance})`,
+          text: `${asset.asset.symbol}${networkInfo} (${asset.availableBalance})`,
           callback_data: key,
         },
       ];
@@ -337,9 +341,12 @@ async function startSwapProcess(chatId: number): Promise<void> {
         balance: asset.availableBalance,
       });
 
+      // Add network information if available
+      const networkInfo = asset.network ? ` (${asset.asset.network.name})` : '';
+
       return [
         {
-          text: `${asset.asset.symbol} (${asset.availableBalance})`,
+          text: `${asset.asset.symbol}${networkInfo} (${asset.availableBalance})`,
           callback_data: key,
         },
       ];
@@ -1055,16 +1062,20 @@ async function executeSwap(chatId: number): Promise<void> {
     );
 
     if (swapResult.success) {
-      // Send success message
+      // Create Solscan link for transaction
+      const solscanLink = `https://solscan.io/tx/${swapResult.txId}`;
+      
+      // Send success message with Solscan link
       const swapMessage =
         "✅ SWAP TRANSACTION SUBMITTED\n\n" +
         "Transaction ID: " +
         swapResult.txId +
         "\n" +
         `Swapped ${state.amount} ${state.fromSymbol} to approximately ${state.expectedOutput} ${state.toSymbol}\n\n` +
+        `View on Solscan: ${solscanLink}\n\n` +
         "Your transaction is being processed on the blockchain.\n";
 
-      await bot.sendMessage(chatId, swapMessage);
+      await bot.sendMessage(chatId, swapMessage, { disable_web_page_preview: true });
 
       // Clear user state
       userStates.delete(chatId);
