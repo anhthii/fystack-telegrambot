@@ -1,5 +1,5 @@
-import { Transaction, PublicKey, Connection } from "@solana/web3.js";
-import { NATIVE_MINT } from "@solana/spl-token";
+import { Transaction, PublicKey, Connection, SystemProgram } from "@solana/web3.js";
+import { NATIVE_MINT, createAssociatedTokenAccountInstruction, getAssociatedTokenAddress } from "@solana/spl-token";
 import axios from "axios";
 import {
   API_URLS,
@@ -13,7 +13,7 @@ import {
 import BN from "bn.js";
 import { SolanaSigner, Environment } from "@fystack/wallet-sdk";
 import dotenv from "dotenv";
-    // Get Helius API key from environment variables
+// Get Helius API key from environment variables
 const heliusApiKey = process.env.HELIUS_API_KEY;
 
 // Load environment variables
@@ -34,8 +34,10 @@ const connection = new Connection(
 
 // API credentials
 const apiCredentials = {
-  apiKey: "9ddf7783-7b57-4a78-a49b-9366cfed6287",
-  apiSecret: "f23a2231b1a394c2168e7459a3c56574",
+  // apiKey: "9ddf7783-7b57-4a78-a49b-9366cfed6287",
+  // apiSecret: "f23a2231b1a394c2168e7459a3c56574",
+  apiKey: "55baa7d1-9ab1-4acb-bd69-d0aeea5eb08a",
+  apiSecret: "1acf8f3176b3af6b1d9f9a71136cf718",
 };
 
 /**
@@ -64,14 +66,14 @@ export async function executeTokenSwap(
 ): Promise<{ success: boolean; txId?: string; error?: string }> {
   try {
     // Initialize signer
-    const signer = new SolanaSigner(apiCredentials, Environment.Sandbox);
+    const signer = new SolanaSigner(apiCredentials, Environment.Local);
 
     // Get user address
     const address = await signer.getAddress();
     const owner = new PublicKey(address);
 
     // Prepare swap parameters
-    const slippage = 0.5; // 0.5% slippage
+    const slippage = 1; // 0.5% slippage
     const txVersion = "LEGACY";
 
     // Get swap route from Raydium API
@@ -100,17 +102,25 @@ export async function executeTokenSwap(
       allMints.find((m) => m.address === outputTokenMint)!.programId,
     ];
 
+    console.log("Mintaprogram", mintAProgram);
+    console.log("MintBProgrqam", mintBProgram);
+
     // Get token accounts
     const inputAccount = getATAAddress(
       owner,
       new PublicKey(inputTokenMint),
       new PublicKey(mintAProgram)
     ).publicKey;
+
+    console.log("inputAccount", inputAccount.toBase58());
     const outputAccount = getATAAddress(
       owner,
       new PublicKey(outputTokenMint),
       new PublicKey(mintBProgram)
     ).publicKey;
+
+    console.log("outputAccount", outputAccount.toBase58());
+    console.log("SWAP AMOUNT", amount);
 
     // Create swap instruction
     const ins = swapBaseInAutoAccount({
@@ -134,6 +144,35 @@ export async function executeTokenSwap(
     });
     instructions.forEach((ins) => tx.add(ins));
 
+    // Check if accounts exist and create them if they don't
+    const inputAccountInfo = await connection.getAccountInfo(inputAccount);
+    const outputAccountInfo = await connection.getAccountInfo(outputAccount);
+
+    // Create input token account if it doesn't exist
+    if (!inputAccountInfo && inputTokenMint !== NATIVE_MINT.toBase58()) {
+      const createInputAta = createAssociatedTokenAccountInstruction(
+        owner, // payer
+        inputAccount, // ata
+        owner, // owner
+        new PublicKey(inputTokenMint), // mint
+        new PublicKey(mintAProgram) // program id
+      );
+      tx.add(createInputAta);
+    }
+
+    // Create output token account if it doesn't exist
+    if (!outputAccountInfo && outputTokenMint !== NATIVE_MINT.toBase58()) {
+      const createOutputAta = createAssociatedTokenAccountInstruction(
+        owner, // payer
+        outputAccount, // ata
+        owner, // owner
+        new PublicKey(outputTokenMint), // mint
+        new PublicKey(mintBProgram) // program id
+      );
+      tx.add(createOutputAta);
+    }
+
+    // Add the swap instruction
     tx.add(ins);
     tx.recentBlockhash = recentBlockhash;
     tx.feePayer = owner;
@@ -199,85 +238,44 @@ export async function getSwapQuote(
   }
 }
 
-export async function getTokenMetadata(mintAddress: string): Promise<{ 
+export async function getTokenMetadata(mintAddress: string): Promise<{
   symbol: string;
   name: string;
   decimals: number;
 }> {
   try {
-
-    if (!heliusApiKey) {
-      throw new Error("Helius API key not found in environment variables");
-    }
-    
     console.log(`Fetching metadata for token mint: ${mintAddress}`);
-    
-    // Make a request to Helius token-metadata API
-    const response = await axios.post(
-      `https://api.helius.xyz/v0/token-metadata?api-key=${heliusApiKey}`,
-      {
-        mintAccounts: [mintAddress],
-        includeOffChain: true
-      }
+
+    // Make a request to Jupiter token API
+    const response = await axios.get(
+      `https://lite-api.jup.ag/tokens/v1/token/${mintAddress}`
     );
-    
-    // For debugging, log the raw response
-    console.log("Helius API response:", JSON.stringify(response.data, null, 2));
-    
+
     // Check if we have a valid response
-    if (!response.data || !response.data[0]) {
-      throw new Error("Invalid response from Helius API");
+    if (!response.data) {
+      throw new Error("Invalid response from Jupiter API");
     }
-    
-    const tokenData = response.data[0];
-    
-    // First try to get decimals from on-chain account info
-    let decimals = 9; // Default fallback
-    let name = "Unknown Token";
-    let symbol = "UNKNOWN";
-    
-    // Extract decimals from onChainAccountInfo
-    if (tokenData.onChainAccountInfo && 
-        tokenData.onChainAccountInfo.accountInfo && 
-        tokenData.onChainAccountInfo.accountInfo.data &&
-        tokenData.onChainAccountInfo.accountInfo.data.parsed &&
-        tokenData.onChainAccountInfo.accountInfo.data.parsed.info) {
-      decimals = tokenData.onChainAccountInfo.accountInfo.data.parsed.info.decimals || decimals;
-      console.log(`Found decimals from onChainAccountInfo: ${decimals}`);
-    }
-    
-    // Try to get name and symbol from metadata
-    if (tokenData.onChainMetadata && tokenData.onChainMetadata.metadata && tokenData.onChainMetadata.metadata.data) {
-      name = tokenData.onChainMetadata.metadata.data.name || name;
-      symbol = tokenData.onChainMetadata.metadata.data.symbol || symbol;
-      console.log(`Found name/symbol from onChainMetadata: ${name}/${symbol}`);
-    }
-    
-    // As fallback, check legacy metadata
-    if (tokenData.legacyMetadata) {
-      name = tokenData.legacyMetadata.name || name;
-      symbol = tokenData.legacyMetadata.symbol || symbol;
-      decimals = tokenData.legacyMetadata.decimals || decimals;
-      console.log(`Found data from legacyMetadata: ${name}/${symbol}/${decimals}`);
-    }
-    
-    // Return the token information
+
+    const tokenData = response.data;
+    console.log("Jupiter API response:", JSON.stringify(tokenData, null, 2));
+
+    // Jupiter API returns the token data in a more direct format
     const result = {
-      name: name.trim(),
-      symbol: symbol.trim(),
-      decimals: Number(decimals)
+      name: tokenData.name || "Unknown Token",
+      symbol: tokenData.symbol || "UNKNOWN",
+      decimals: tokenData.decimals || 9,
     };
-    
+
     console.log(`Final token metadata: ${JSON.stringify(result)}`);
     return result;
   } catch (error) {
     console.error("Error fetching token metadata:", error);
-    
+
     // Return default values if fetch fails
     return {
       name: "Unknown Token",
       symbol: "UNKNOWN",
-      decimals: 9 // Default for Solana tokens
+      decimals: 9, // Default for Solana tokens
     };
   }
 }

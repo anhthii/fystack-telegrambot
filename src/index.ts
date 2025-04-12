@@ -28,6 +28,7 @@ import {
   executeTokenSwap,
   getSwapQuote,
   getTokenMintAddress,
+  getTokenMetadata
 } from "./services/swapService";
 
 // Load environment variables
@@ -511,9 +512,15 @@ bot.on("callback_query", async (callbackQuery) => {
         // User selected a predefined token
         try {
           const tokenMint = getTokenMintAddress(tokenSymbol);
+          
+          // Get token metadata for the selected token
+          const tokenMetadata = await getTokenMetadata(tokenMint);
+
+          console.log("tokenMetadata", tokenMetadata);
 
           state.toSymbol = tokenSymbol;
           state.toMint = tokenMint;
+          state.toTokenDecimals = tokenMetadata.decimals;
           state.step = "enter_swap_amount";
           userStates.set(chatId, state);
 
@@ -780,16 +787,49 @@ async function handleSwapToAddressInput(
     return;
   }
 
-  // Update state with the token mint address
-  state.toMint = toMint;
-  state.toSymbol = "Custom Token";
-  state.step = "enter_swap_amount";
-  userStates.set(chatId, state);
+  // Fetch token metadata for custom token
+  const loadingMsg = await bot.sendMessage(chatId, "Fetching token information...");
+  
+  try {
+    const tokenMetadata = await getTokenMetadata(toMint);
+    
+    // Update state with the token mint address and metadata
+    state.toMint = toMint;
+    state.toSymbol = tokenMetadata.symbol;
+    state.toTokenName = tokenMetadata.name;
+    state.toTokenDecimals = tokenMetadata.decimals;
+    state.step = "enter_swap_amount";
+    userStates.set(chatId, state);
 
-  await bot.sendMessage(
-    chatId,
-    `You selected to swap from ${state.fromSymbol} to a custom token.\n\nPlease enter the amount of ${state.fromSymbol} you want to swap:`
-  );
+    await safeApiCall(
+      bot.deleteMessage(chatId, loadingMsg.message_id),
+      "Failed to delete loading message"
+    );
+
+    await bot.sendMessage(
+      chatId,
+      `You selected to swap from ${state.fromSymbol} to ${tokenMetadata.name} (${tokenMetadata.symbol}).\n\nPlease enter the amount of ${state.fromSymbol} you want to swap:`
+    );
+  } catch (error) {
+    console.error("Error fetching token metadata:", error);
+    
+    await safeApiCall(
+      bot.deleteMessage(chatId, loadingMsg.message_id),
+      "Failed to delete loading message"
+    );
+    
+    // Continue with limited information
+    state.toMint = toMint;
+    state.toSymbol = "Custom Token";
+    state.toTokenDecimals = 9; // Default for Solana tokens
+    state.step = "enter_swap_amount";
+    userStates.set(chatId, state);
+
+    await bot.sendMessage(
+      chatId,
+      `You selected to swap from ${state.fromSymbol} to a custom token.\n\nPlease enter the amount of ${state.fromSymbol} you want to swap:`
+    );
+  }
 }
 
 // Handle swap amount input
@@ -862,20 +902,8 @@ async function handleSwapAmountInput(
       throw new Error(quoteResult.error || "Failed to get swap quote");
     }
 
-    // Get decimals for the destination token if possible
-    let toTokenDecimals = 9; // Default to 9 decimals as fallback
-    const toAssetInfo = walletData.find(asset => 
-      asset.asset.symbol === state.toSymbol
-    );
-    
-    if (toAssetInfo) {
-      toTokenDecimals = toAssetInfo.asset.decimals;
-      console.log("toTokenDecimals", toTokenDecimals);
-    }
-
-
-    
-    state.toTokenDecimals = toTokenDecimals;
+    // Use the destination token decimals from state if available (set during token selection)
+    const toTokenDecimals = state.toTokenDecimals || 9;
 
     // Parse the expected output amount using proper decimal conversion
     const expectedOutputRaw = parseFloat(quoteResult.expectedOutput || "0");
