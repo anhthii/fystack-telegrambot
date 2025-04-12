@@ -1,5 +1,14 @@
-import { Transaction, PublicKey, Connection, SystemProgram } from "@solana/web3.js";
-import { NATIVE_MINT, createAssociatedTokenAccountInstruction, getAssociatedTokenAddress } from "@solana/spl-token";
+import {
+  Transaction,
+  PublicKey,
+  Connection,
+  SystemProgram,
+} from "@solana/web3.js";
+import {
+  NATIVE_MINT,
+  createAssociatedTokenAccountInstruction,
+  getAssociatedTokenAddress,
+} from "@solana/spl-token";
 import axios from "axios";
 import {
   API_URLS,
@@ -34,10 +43,10 @@ const connection = new Connection(
 
 // API credentials
 const apiCredentials = {
-  // apiKey: "9ddf7783-7b57-4a78-a49b-9366cfed6287",
-  // apiSecret: "f23a2231b1a394c2168e7459a3c56574",
-  apiKey: "55baa7d1-9ab1-4acb-bd69-d0aeea5eb08a",
-  apiSecret: "1acf8f3176b3af6b1d9f9a71136cf718",
+  apiKey: "9ddf7783-7b57-4a78-a49b-9366cfed6287",
+  apiSecret: "f23a2231b1a394c2168e7459a3c56574",
+  // apiKey: "55baa7d1-9ab1-4acb-bd69-d0aeea5eb08a",
+  // apiSecret: "1acf8f3176b3af6b1d9f9a71136cf718",
 };
 
 /**
@@ -66,14 +75,14 @@ export async function executeTokenSwap(
 ): Promise<{ success: boolean; txId?: string; error?: string }> {
   try {
     // Initialize signer
-    const signer = new SolanaSigner(apiCredentials, Environment.Local);
+    const signer = new SolanaSigner(apiCredentials, Environment.Sandbox);
 
     // Get user address
     const address = await signer.getAddress();
     const owner = new PublicKey(address);
 
     // Prepare swap parameters
-    const slippage = 1; // 0.5% slippage
+    const slippage = 1; // 1% slippage
     const txVersion = "LEGACY";
 
     // Get swap route from Raydium API
@@ -90,99 +99,81 @@ export async function executeTokenSwap(
     }
 
     // Get pool keys for the swap route
-    const res = await axios.get(
+    const { data: poolKeysResponse } = await axios.get(
       API_URLS.BASE_HOST +
         API_URLS.POOL_KEY_BY_ID +
         `?ids=${swapResponse.data.routePlan.map((r) => r.poolId).join(",")}`
     );
 
-    const allMints = res.data.data.map((r) => [r.mintA, r.mintB]).flat();
-    const [mintAProgram, mintBProgram] = [
-      allMints.find((m) => m.address === inputTokenMint)!.programId,
-      allMints.find((m) => m.address === outputTokenMint)!.programId,
-    ];
+    // Use the tokenProgramId from RAYDIUM SDK constants
+    const tokenProgramId = new PublicKey(
+      "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+    );
 
-    console.log("Mintaprogram", mintAProgram);
-    console.log("MintBProgrqam", mintBProgram);
+    // Determine if we're dealing with SOL and need to wrap/unwrap
+    const isInputSol = inputTokenMint === NATIVE_MINT.toBase58();
+    const isOutputSol = outputTokenMint === NATIVE_MINT.toBase58();
 
-    // Get token accounts
-    const inputAccount = getATAAddress(
-      owner,
-      new PublicKey(inputTokenMint),
-      new PublicKey(mintAProgram)
-    ).publicKey;
+    // Calculate input and output accounts
+    let inputAccount: string | undefined = undefined;
+    let outputAccount: string | undefined = undefined;
 
-    console.log("inputAccount", inputAccount.toBase58());
-    const outputAccount = getATAAddress(
-      owner,
-      new PublicKey(outputTokenMint),
-      new PublicKey(mintBProgram)
-    ).publicKey;
-
-    console.log("outputAccount", outputAccount.toBase58());
-    console.log("SWAP AMOUNT", amount);
-
-    // Create swap instruction
-    const ins = swapBaseInAutoAccount({
-      programId: ALL_PROGRAM_ID.Router,
-      wallet: owner,
-      amount: new BN(amount),
-      inputAccount,
-      outputAccount,
-      routeInfo: swapResponse,
-      poolKeys: res.data.data,
-    });
-
-    // Create and sign transaction
-    const recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
-    const tx = new Transaction();
-
-    // Add compute budget instructions
-    const { instructions } = addComputeBudget({
-      units: 600000,
-      microLamports: 6000000,
-    });
-    instructions.forEach((ins) => tx.add(ins));
-
-    // Check if accounts exist and create them if they don't
-    const inputAccountInfo = await connection.getAccountInfo(inputAccount);
-    const outputAccountInfo = await connection.getAccountInfo(outputAccount);
-
-    // Create input token account if it doesn't exist
-    if (!inputAccountInfo && inputTokenMint !== NATIVE_MINT.toBase58()) {
-      const createInputAta = createAssociatedTokenAccountInstruction(
-        owner, // payer
-        inputAccount, // ata
-        owner, // owner
-        new PublicKey(inputTokenMint), // mint
-        new PublicKey(mintAProgram) // program id
+    if (!isInputSol) {
+      const inputAta = await getAssociatedTokenAddress(
+        new PublicKey(inputTokenMint),
+        owner,
+        false,
+        tokenProgramId
       );
-      tx.add(createInputAta);
+      inputAccount = inputAta.toString();
     }
 
-    // Create output token account if it doesn't exist
-    if (!outputAccountInfo && outputTokenMint !== NATIVE_MINT.toBase58()) {
-      const createOutputAta = createAssociatedTokenAccountInstruction(
-        owner, // payer
-        outputAccount, // ata
-        owner, // owner
-        new PublicKey(outputTokenMint), // mint
-        new PublicKey(mintBProgram) // program id
+    if (!isOutputSol) {
+      const outputAta = await getAssociatedTokenAddress(
+        new PublicKey(outputTokenMint),
+        owner,
+        false,
+        tokenProgramId
       );
-      tx.add(createOutputAta);
+      outputAccount = outputAta.toString();
     }
 
-    // Add the swap instruction
-    tx.add(ins);
-    tx.recentBlockhash = recentBlockhash;
-    tx.feePayer = owner;
+    // Instead of building the transaction manually, use Raydium's transaction API
+    const { data: swapTransactions } = await axios.post(
+      `${API_URLS.SWAP_HOST}/transaction/swap-base-in`,
+      {
+        computeUnitPriceMicroLamports: String(6000000),
+        swapResponse,
+        txVersion,
+        wallet: owner.toBase58(),
+        wrapSol: isInputSol,
+        unwrapSol: isOutputSol,
+        inputAccount,
+        outputAccount,
+      }
+    );
 
-    // Serialize transaction
-    const serializedTx = tx.serialize({ requireAllSignatures: false });
-    const txString = serializedTx.toString("base64");
+    if (!swapTransactions.success) {
+      throw new Error(
+        `Failed to get swap transaction: ${
+          swapTransactions.msg || "Unknown error"
+        }`
+      );
+    }
+
+    console.log("Swap transaction created successfully");
+
+    // Sign and send transaction
+    const allTxBuf = swapTransactions.data.map((tx) =>
+      Buffer.from(tx.transaction, "base64")
+    );
+
+    const txString = allTxBuf[0].toString("base64");
+    console.log("Transaction base64 string ready for signing");
 
     // Sign and send transaction
     const result = await signer.signTransaction(txString);
+    console.log("Transaction signed with result:", result);
 
     // Return success with transaction ID
     return {
