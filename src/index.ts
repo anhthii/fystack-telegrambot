@@ -22,6 +22,7 @@ import {
   getWorkspaceWallets,
   setCurrentWorkspace,
   setCurrentWalletId,
+  logoutAndClearState
 } from "./services/authenticationService";
 import { performAddressRiskCheck } from "./services/riskCheckService";
 import {
@@ -57,27 +58,78 @@ const assetDataMap = new Map<
 
 // Start command handler
 bot.onText(/\/start/, async (msg) => {
-  const opts = {
-    reply_markup: {
-      keyboard: [["💼 Connect Wallet", "📊 Monitor Wallet"]],
-      resize_keyboard: true,
-    },
-  };
+  const chatId = msg.chat.id;
+  
+  // Check if user is already authenticated
+  if (isAuthenticated()) {
+    const opts = {
+      reply_markup: {
+        keyboard: [
+          ["💸 Send", "🔄 Swap"],
+          ["📊 Monitor Wallet", "🔀 Change Wallet", "🔒 Logout"]
+        ],
+        resize_keyboard: true,
+      },
+    };
 
-  await bot.sendMessage(
-    msg.chat.id,
-    `👋 Welcome to Crypto Wallet Monitor Bot! ${msg.from?.first_name} 🚀`,
-    opts
-  );
+    await bot.sendMessage(
+      chatId,
+      `👋 Welcome back, ${msg.from?.first_name}! Your wallet is connected. What would you like to do? 🚀`,
+      opts
+    );
+  } else {
+    const opts = {
+      reply_markup: {
+        keyboard: [["💼 Connect Wallet"]],
+        resize_keyboard: true,
+      },
+    };
+
+    await bot.sendMessage(
+      chatId,
+      `👋 Welcome to Crypto Wallet Bot built with MPC technology! ${msg.from?.first_name} 🚀`,
+      opts
+    );
+  }
 
   // Reset user state
-  userStates.delete(msg.chat.id);
+  userStates.delete(chatId);
 });
 
 // New authenticate command handler
 bot.onText(/\/authenticate/, async (msg) => {
   const chatId = msg.chat.id;
   await startAuthenticationFlow(chatId);
+});
+
+// Reset command handler
+bot.onText(/\/reset/, async (msg) => {
+  const chatId = msg.chat.id;
+  
+  // Clear user state
+  userStates.delete(chatId);
+  
+  // Clear authentication
+  logoutAndClearState();
+  
+  await bot.sendMessage(
+    chatId,
+    "Bot has been reset. All your data and session information has been cleared."
+  );
+  
+  // Show the initial welcome message
+  const opts = {
+    reply_markup: {
+      keyboard: [["💼 Connect Wallet"]],
+      resize_keyboard: true,
+    },
+  };
+
+  await bot.sendMessage(
+    chatId,
+    `👋 Welcome to Crypto Wallet Monitor Bot! ${msg.from?.first_name} 🚀`,
+    opts
+  );
 });
 
 // Handle messages
@@ -150,6 +202,37 @@ bot.on("message", async (msg) => {
     } else {
       await showWorkspaceSelection(chatId);
     }
+  } else if (msg.text === "👥 Choose Workspace") {
+    if (!isAuthenticated()) {
+      await bot.sendMessage(
+        chatId,
+        "You need to connect a wallet first. Use the 'Connect Wallet' option to get started."
+      );
+    } else {
+      await showWorkspaceSelection(chatId);
+    }
+  } else if (msg.text === "🔒 Logout") {
+    // Handle logout
+    logoutAndClearState();
+    
+    await bot.sendMessage(
+      chatId,
+      "You have been successfully logged out. Your authentication credentials have been cleared."
+    );
+    
+    // Show only Connect Wallet option after logout
+    const opts = {
+      reply_markup: {
+        keyboard: [["💼 Connect Wallet"]],
+        resize_keyboard: true,
+      },
+    };
+    
+    await bot.sendMessage(
+      chatId,
+      "You'll need to connect a wallet to continue using the full features of the bot.",
+      opts
+    );
   }
 });
 
@@ -159,7 +242,7 @@ async function showWalletActions(chatId: number): Promise<void> {
     reply_markup: {
       keyboard: [
         ["💸 Send", "🔄 Swap"], 
-        ["📊 Monitor Wallet", "🔀 Change Wallet"]  // Added Change Wallet option
+        ["📊 Monitor Wallet", "🔀 Change Wallet", "🔒 Logout"]
       ],
       resize_keyboard: true,
     },

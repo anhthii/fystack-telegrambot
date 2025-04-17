@@ -468,3 +468,30 @@ export function initializeAuthentication(): void {
 export function isAuthenticated(): boolean {
   return !!currentAccessToken;
 }
+
+/**
+ * Log out and clear all authentication state
+ */
+export function logoutAndClearState(): void {
+  try {
+    // Clear in-memory state
+    currentWalletId = null;
+    currentAccessToken = null;
+    currentWorkspaceId = null;
+    
+    // Remove authorization header from API client
+    if (apiClient.defaults.headers) {
+      delete apiClient.defaults.headers.common["Authorization"];
+    }
+    
+    // Delete auth state file if it exists
+    if (fs.existsSync(AUTH_STATE_FILE)) {
+      fs.unlinkSync(AUTH_STATE_FILE);
+      console.log("Authentication state file deleted");
+    }
+    
+    console.log("Logged out and cleared all authentication state");
+  } catch (error) {
+    console.error("Error during logout:", error);
+  }
+}
