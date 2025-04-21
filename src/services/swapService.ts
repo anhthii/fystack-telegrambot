@@ -20,7 +20,11 @@ import {
   addComputeBudget,
 } from "@raydium-io/raydium-sdk-v2";
 import BN from "bn.js";
-import { SolanaSigner, Environment } from "@fystack/wallet-sdk";
+import {
+  SolanaSigner,
+  Environment,
+  StatusPollerOptions,
+} from "@fystack/wallet-sdk";
 import dotenv from "dotenv";
 // Get Helius API key from environment variables
 const heliusApiKey = process.env.HELIUS_API_KEY;
@@ -43,10 +47,20 @@ const connection = new Connection(
 
 // API credentials
 const apiCredentials = {
-  apiKey: "9ddf7783-7b57-4a78-a49b-9366cfed6287",
-  apiSecret: "f23a2231b1a394c2168e7459a3c56574",
+  apiKey: "26fe8140-73dc-4372-80bb-d2304fa6f3ad",
+  apiSecret: "197c9da5a41f77aaf475aa1835c5ee84",
+  // apiKey: "9ddf7783-7b57-4a78-a49b-9366cfed6287",
+  // apiSecret: "f23a2231b1a394c2168e7459a3c56574",
   // apiKey: "55baa7d1-9ab1-4acb-bd69-d0aeea5eb08a",
   // apiSecret: "1acf8f3176b3af6b1d9f9a71136cf718",
+};
+
+const pollerOptions: StatusPollerOptions = {
+  maxAttempts: 30,
+  interval: 1000, // Start with 1 second
+  backoffFactor: 1.1, // Increase interval by 50% each time
+  maxInterval: 10000, // Max 10 seconds between attempts
+  timeoutMs: 10 * 60 * 1000, // 10 minutes totla
 };
 
 /**
@@ -75,35 +89,52 @@ export async function executeTokenSwap(
 ): Promise<{ success: boolean; txId?: string; error?: string }> {
   try {
     // Initialize signer
-    const signer = new SolanaSigner(apiCredentials, Environment.Sandbox);
+    const signer = new SolanaSigner(
+      apiCredentials,
+      Environment.Sandbox,
+      pollerOptions
+    );
 
     // Get user address
-    const address = await signer.getAddress();
-    const owner = new PublicKey(address);
 
     // Prepare swap parameters
     const slippage = 1; // 1% slippage
     const txVersion = "LEGACY";
 
-    // Get swap route from Raydium API
-    const { data: swapResponse } = await axios.get<ApiSwapV1Out>(
-      `${
-        API_URLS.SWAP_HOST
-      }/compute/swap-base-in?inputMint=${inputTokenMint}&outputMint=${outputTokenMint}&amount=${amount}&slippageBps=${
-        slippage * 100
-      }&txVersion=${txVersion}`
+    // 1) Start both async ops without awaiting yet:
+    const addressPromise = signer.getAddress();
+    const swapResponsePromise = axios.get<ApiSwapV1Out>(
+      `${API_URLS.SWAP_HOST}/compute/swap-base-in`,
+      {
+        params: {
+          inputMint: inputTokenMint,
+          outputMint: outputTokenMint,
+          amount,
+          slippageBps: slippage * 100,
+          txVersion,
+        },
+      }
     );
+
+    // 2) Await them together:
+    const [address, { data: swapResponse }] = await Promise.all([
+      addressPromise,
+      swapResponsePromise,
+    ]);
+
+    // 3) Now you have both:
+    const owner = new PublicKey(address);
 
     if (!swapResponse.success) {
       throw new Error(swapResponse.msg);
     }
 
-    // Get pool keys for the swap route
-    const { data: poolKeysResponse } = await axios.get(
-      API_URLS.BASE_HOST +
-        API_URLS.POOL_KEY_BY_ID +
-        `?ids=${swapResponse.data.routePlan.map((r) => r.poolId).join(",")}`
-    );
+    // // Get pool keys for the swap route
+    // const { data: poolKeysResponse } = await axios.get(
+    //   API_URLS.BASE_HOST +
+    //     API_URLS.POOL_KEY_BY_ID +
+    //     `?ids=${swapResponse.data.routePlan.map((r) => r.poolId).join(",")}`
+    // );
 
     // Use the tokenProgramId from RAYDIUM SDK constants
     const tokenProgramId = new PublicKey(
@@ -114,35 +145,37 @@ export async function executeTokenSwap(
     const isInputSol = inputTokenMint === NATIVE_MINT.toBase58();
     const isOutputSol = outputTokenMint === NATIVE_MINT.toBase58();
 
-    // Calculate input and output accounts
-    let inputAccount: string | undefined = undefined;
-    let outputAccount: string | undefined = undefined;
+    // Kick off both calls (or a resolved `undefined` if SOL)
+    const inputAccountPromise = !isInputSol
+      ? getAssociatedTokenAddress(
+          new PublicKey(inputTokenMint),
+          owner,
+          false,
+          tokenProgramId
+        ).then((ata) => ata.toString())
+      : Promise.resolve<string | undefined>(undefined);
 
-    if (!isInputSol) {
-      const inputAta = await getAssociatedTokenAddress(
-        new PublicKey(inputTokenMint),
-        owner,
-        false,
-        tokenProgramId
-      );
-      inputAccount = inputAta.toString();
-    }
+    const outputAccountPromise = !isOutputSol
+      ? getAssociatedTokenAddress(
+          new PublicKey(outputTokenMint),
+          owner,
+          false,
+          tokenProgramId
+        ).then((ata) => ata.toString())
+      : Promise.resolve<string | undefined>(undefined);
 
-    if (!isOutputSol) {
-      const outputAta = await getAssociatedTokenAddress(
-        new PublicKey(outputTokenMint),
-        owner,
-        false,
-        tokenProgramId
-      );
-      outputAccount = outputAta.toString();
-    }
+    // Await both in parallel
+    const [inputAccount, outputAccount] = await Promise.all([
+      inputAccountPromise,
+      outputAccountPromise,
+    ]);
 
     // Instead of building the transaction manually, use Raydium's transaction API
     const { data: swapTransactions } = await axios.post(
       `${API_URLS.SWAP_HOST}/transaction/swap-base-in`,
       {
-        computeUnitPriceMicroLamports: String(6000000),
+        // computeUnitPriceMicroLamports: String(6000000),
+        computeUnitPriceMicroLamports: String(100_000),
         swapResponse,
         txVersion,
         wallet: owner.toBase58(),
